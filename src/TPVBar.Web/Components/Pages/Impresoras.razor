@@ -1,0 +1,361 @@
+@page "/configuracion/impresoras"
+@attribute [Authorize(Policy = Policies.ManagePrinting)]
+@implements IDisposable
+@using Microsoft.AspNetCore.Authorization
+@using TPVBar.Application.Features.Printing
+@using TPVBar.Domain.Catalog
+@using TPVBar.Domain.Printing
+@inject UseCaseRunner Runner
+@inject OperationEventBus Bus
+
+<PageTitle>Impresoras · TPVBar</PageTitle>
+
+<main class="page page--wide">
+    <h1>Impresoras</h1>
+
+    @if (_error is not null)
+    {
+        <p class="alert alert--error" role="alert">@_error</p>
+    }
+    @if (_info is not null)
+    {
+        <p class="alert alert--ok" role="status">@_info</p>
+    }
+
+    @if (_overview is not null)
+    {
+        <p class="alert @(_overview.AgentOnline ? "alert--ok" : "alert--error")" role="status">
+            @if (_overview.AgentOnline)
+            {
+                <text>Agente de impresión conectado (último contacto: @Ago(_overview.AgentLastSeenAt)).</text>
+            }
+            else
+            {
+                <text>Agente de impresión SIN CONEXIÓN@(_overview.AgentLastSeenAt is null ? " (nunca se ha conectado)" : $" (último contacto: {Ago(_overview.AgentLastSeenAt)})"). Los tickets se acumulan en cola y no se imprimirán hasta que el agente arranque.</text>
+            }
+        </p>
+    }
+
+    <div class="split">
+        <section aria-labelledby="lista">
+            <h2 id="lista">Impresoras</h2>
+            <button type="button" class="btn btn--primary" @onclick="NewPrinter">Nueva impresora</button>
+
+            @if (_overview is null)
+            {
+                <p>Cargando…</p>
+            }
+            else if (_overview.Printers.Count == 0)
+            {
+                <p class="alert">No hay impresoras. Sin ellas los pedidos llegan a la pantalla de cocina pero no se imprimen.</p>
+            }
+            else
+            {
+                @foreach (var p in _overview.Printers)
+                {
+                    <article class="card @(p.IsActive ? "" : "row--inactive")">
+                        <header>
+                            <h3>@p.Name</h3>
+                            @if (p.IsSimulated)
+                            {
+                                <span class="badge badge--warn">SIMULADA · no es un dispositivo real</span>
+                            }
+                            <span class="badge">@(p.Type == PrinterType.Kitchen ? "Cocina" : "Tickets")</span>
+                            @if (!p.IsActive) { <span class="badge">Desactivada</span> }
+                        </header>
+                        <p class="muted">@ConnectionText(p.Connection): <code>@p.Target</code> · papel @p.PaperWidthMm mm</p>
+                        <p>
+                            @if (p.LastError is not null)
+                            {
+                                <span class="badge badge--bill">Error</span> <span>@p.LastError (@Ago(p.LastErrorAt))</span>
+                            }
+                            else if (p.LastSuccessAt is not null)
+                            {
+                                <span class="badge badge--free">OK</span> <span>Último envío correcto @Ago(p.LastSuccessAt)</span>
+                            }
+                            else
+                            {
+                                <span class="muted">Sin actividad todavía.</span>
+                            }
+                            · En cola: @p.PendingJobs · Fallidos: @p.FailedJobs
+                        </p>
+                        <div class="form-actions">
+                            <button type="button" class="btn btn--small" disabled="@(_busy || !p.IsActive)" @onclick="() => TestAsync(p)">Imprimir prueba</button>
+                            <button type="button" class="btn btn--small" @onclick="() => EditPrinter(p)">Editar</button>
+                            <button type="button" class="btn btn--small" @onclick="() => ToggleAsync(p)">@(p.IsActive ? "Desactivar" : "Activar")</button>
+                        </div>
+                    </article>
+                }
+
+                <h2>Qué imprime cada destino</h2>
+                <p class="muted">Cada pedido genera un ticket por destino. Pregunta pendiente: si la barra debe tener su propia impresora; por defecto comparte la de cocina.</p>
+                @foreach (var station in new[] { PreparationStation.Kitchen, PreparationStation.Bar })
+                {
+                    var current = _overview.Routes.FirstOrDefault(r => r.Station == station)?.PrinterId ?? 0;
+                    <label class="route">
+                        @(station == PreparationStation.Bar ? "Barra" : "Cocina")
+                        <select value="@current" @onchange="e => SetRouteAsync(station, e.Value)">
+                            <option value="0">— sin impresora —</option>
+                            @foreach (var p in _overview.Printers.Where(x => x.IsActive && x.Type == PrinterType.Kitchen))
+                            {
+                                <option value="@p.Id">@p.Name</option>
+                            }
+                        </select>
+                    </label>
+                }
+            }
+        </section>
+
+        @if (_form is not null)
+        {
+            <section class="panel" aria-labelledby="form-impresora">
+                <h2 id="form-impresora">@(_form.Id is null ? "Nueva impresora" : "Editar impresora")</h2>
+                <form @onsubmit="SaveAsync">
+                    <label>Nombre <input type="text" maxlength="80" required @bind="_form.Name" /></label>
+                    <label>Función
+                        <select @bind="_form.Type">
+                            <option value="@PrinterType.Kitchen">Cocina / barra</option>
+                            <option value="@PrinterType.Receipt">Tickets (cuenta)</option>
+                        </select>
+                    </label>
+                    <label>Conexión
+                        <select @bind="_form.Connection">
+                            <option value="@PrinterConnection.Windows">Windows (impresora instalada o compartida)</option>
+                            <option value="@PrinterConnection.Network">Red (Ethernet)</option>
+                            <option value="@PrinterConnection.Usb">USB directo (no disponible todavía)</option>
+                            <option value="@PrinterConnection.Simulated">Simulada (solo pruebas)</option>
+                        </select>
+                    </label>
+                    <label>@TargetLabel
+                        <input type="text" maxlength="200" required @bind="_form.Target" />
+                    </label>
+                    <label>Ancho de papel
+                        <select @bind="_form.PaperWidthMm">
+                            <option value="80">80 mm</option>
+                            <option value="58">58 mm</option>
+                        </select>
+                    </label>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn--primary" disabled="@_busy">Guardar</button>
+                        <button type="button" class="btn" @onclick="() => _form = null">Cancelar</button>
+                    </div>
+                </form>
+            </section>
+        }
+    </div>
+
+    <section aria-labelledby="cola">
+        <h2 id="cola">Cola de impresión (últimos 50)</h2>
+        @if (_jobs is not null)
+        {
+            <table class="grid">
+                <thead><tr><th>#</th><th>Impresora</th><th>Documento</th><th>Estado</th><th>Intentos</th><th>Creado</th><th>Detalle</th><th><span class="sr-only">Acciones</span></th></tr></thead>
+                <tbody>
+                    @foreach (var j in _jobs)
+                    {
+                        <tr>
+                            <td>@j.Id</td>
+                            <td>@j.PrinterName</td>
+                            <td>@TypeText(j.Type) · @j.Reference</td>
+                            <td><span class="badge badge--job-@j.Status.ToString().ToLowerInvariant()">@StatusText(j.Status)</span>
+                                @if (j.Status == PrintJobStatus.Sent) { <br /><small>@DeliveryText(j.DeliveryLevel)</small> }
+                            </td>
+                            <td>@j.Attempts / @j.MaxAttempts</td>
+                            <td>@j.CreatedAt.ToLocalTime().ToString("HH:mm:ss")</td>
+                            <td>
+                                @if (j.LastError is not null) { <small>@j.LastError</small> }
+                                @if (j.Status == PrintJobStatus.Pending && j.Attempts > 0) { <small>Próximo intento: @j.NextAttemptAt.ToLocalTime().ToString("HH:mm:ss")</small> }
+                            </td>
+                            <td class="actions">
+                                @if (j.Status == PrintJobStatus.Failed)
+                                {
+                                    <button type="button" class="btn btn--small" disabled="@_busy" @onclick="() => RetryAsync(j)">Reintentar</button>
+                                }
+                                @if (j.Status is PrintJobStatus.Pending or PrintJobStatus.Failed)
+                                {
+                                    <button type="button" class="btn btn--small" disabled="@_busy" @onclick="() => CancelAsync(j)">Cancelar</button>
+                                }
+                                @if (j.Status is PrintJobStatus.Sent or PrintJobStatus.Cancelled or PrintJobStatus.Failed)
+                                {
+                                    <button type="button" class="btn btn--small" disabled="@_busy" @onclick="() => ReprintAsync(j)">Reimprimir</button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </section>
+</main>
+
+@code {
+    private PrintOverview? _overview;
+    private IReadOnlyList<PrintJobRow>? _jobs;
+    private PrinterForm? _form;
+    private string? _error;
+    private string? _info;
+    private bool _busy;
+    private IDisposable? _subscription;
+    private Timer? _timer;
+
+    private string TargetLabel => _form?.Connection switch
+    {
+        PrinterConnection.Network => "Equipo:puerto (p. ej. 192.168.1.50:9100)",
+        PrinterConnection.Simulated => "Carpeta donde se guardarán los tickets",
+        PrinterConnection.Usb => "Identificador USB (reservado)",
+        _ => "Nombre exacto de la impresora en Windows",
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+        _subscription = Bus.Subscribe(e =>
+            e.Name is OperationEventNames.PrintJobCreated or OperationEventNames.PrinterStatusChanged
+                ? InvokeAsync(async () => { await LoadAsync(); StateHasChanged(); })
+                : Task.CompletedTask);
+        _timer = new Timer(_ => _ = InvokeAsync(async () => { await LoadAsync(); StateHasChanged(); }), null, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15));
+    }
+
+    private async Task LoadAsync()
+    {
+        var overview = await Runner.RunAsync<PrintAdminService, PrintOverview>((s, ct) => s.GetOverviewAsync(ct));
+        var jobs = await Runner.RunAsync<PrintAdminService, IReadOnlyList<PrintJobRow>>((s, ct) => s.ListJobsAsync(50, ct));
+        _overview = overview.Value;
+        _jobs = jobs.Value;
+        if (!overview.Ok || !jobs.Ok)
+        {
+            _error = overview.Error ?? jobs.Error;
+        }
+    }
+
+    private async Task ActAsync(Func<Task<UiResult<bool>>> action, string? success)
+    {
+        if (_busy)
+        {
+            return;
+        }
+
+        _busy = true;
+        _info = null;
+        try
+        {
+            var result = await action();
+            _error = result.Error;
+            if (result.Ok)
+            {
+                _info = success;
+            }
+
+            await LoadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void NewPrinter() => _form = new PrinterForm { Type = PrinterType.Kitchen, Connection = PrinterConnection.Windows, PaperWidthMm = 80 };
+
+    private void EditPrinter(PrinterRow p) => _form = new PrinterForm
+    {
+        Id = p.Id, Name = p.Name, Type = p.Type, Connection = p.Connection, Target = p.Target, PaperWidthMm = p.PaperWidthMm,
+    };
+
+    private Task SaveAsync() => ActAsync(async () =>
+    {
+        var form = _form!;
+        var input = new PrinterInput(form.Name ?? string.Empty, form.Type, form.Connection, form.Target ?? string.Empty, form.PaperWidthMm);
+        var result = form.Id is { } id
+            ? await Runner.RunAsync<PrintAdminService>((s, ct) => s.UpdatePrinterAsync(id, input, ct))
+            : await Runner.RunAsync<PrintAdminService>((s, ct) => s.CreatePrinterAsync(input, ct));
+        if (result.Ok)
+        {
+            _form = null;
+        }
+
+        return result;
+    }, "Impresora guardada.");
+
+    private Task ToggleAsync(PrinterRow p) => ActAsync(
+        () => Runner.RunAsync<PrintAdminService>((s, ct) => s.SetPrinterActiveAsync(p.Id, !p.IsActive, ct)), null);
+
+    private Task TestAsync(PrinterRow p) => ActAsync(
+        () => Runner.RunAsync<PrintAdminService>((s, ct) => s.TestPrintAsync(p.Id, ct)),
+        "Prueba encolada. El agente la imprimirá en unos segundos.");
+
+    private Task RetryAsync(PrintJobRow j) => ActAsync(
+        () => Runner.RunAsync<PrintAdminService>((s, ct) => s.RetryAsync(j.Id, ct)), "Trabajo reencolado (tres intentos más).");
+
+    private Task CancelAsync(PrintJobRow j) => ActAsync(
+        () => Runner.RunAsync<PrintAdminService>((s, ct) => s.CancelAsync(j.Id, ct)), "Trabajo cancelado.");
+
+    private Task ReprintAsync(PrintJobRow j) => ActAsync(
+        () => Runner.RunAsync<PrintAdminService>((s, ct) => s.ReprintAsync(j.Id, ct)), "Reimpresión encolada (queda auditada).");
+
+    private Task SetRouteAsync(PreparationStation station, object? value)
+    {
+        var id = int.TryParse(value?.ToString(), out var parsed) && parsed > 0 ? parsed : (int?)null;
+        return ActAsync(() => Runner.RunAsync<PrintAdminService>((s, ct) => s.SetRouteAsync(station, id, ct)), "Destino actualizado.");
+    }
+
+    private static string Ago(DateTimeOffset? instant)
+    {
+        if (instant is null)
+        {
+            return "nunca";
+        }
+
+        var span = DateTimeOffset.UtcNow - instant.Value;
+        return span.TotalSeconds < 60 ? "hace unos segundos" : span.TotalMinutes < 60 ? $"hace {(int)span.TotalMinutes} min" : instant.Value.ToLocalTime().ToString("g");
+    }
+
+    private static string ConnectionText(PrinterConnection c) => c switch
+    {
+        PrinterConnection.Windows => "Windows",
+        PrinterConnection.Network => "Red",
+        PrinterConnection.Usb => "USB directo",
+        _ => "Simulada",
+    };
+
+    private static string TypeText(PrintJobType t) => t switch
+    {
+        PrintJobType.KitchenTicket => "Pedido",
+        PrintJobType.KitchenVoid => "Anulación",
+        PrintJobType.PreBill => "Pre-cuenta",
+        _ => "Prueba",
+    };
+
+    private static string StatusText(PrintJobStatus s) => s switch
+    {
+        PrintJobStatus.Pending => "En cola",
+        PrintJobStatus.Processing => "Imprimiendo",
+        PrintJobStatus.Sent => "Enviado",
+        PrintJobStatus.Failed => "Fallido",
+        _ => "Cancelado",
+    };
+
+    private static string DeliveryText(DeliveryLevel l) => l switch
+    {
+        DeliveryLevel.Simulated => "Simulado: no ha salido papel",
+        DeliveryLevel.SentToDevice => "Enviado a la impresora (sin confirmación de papel)",
+        DeliveryLevel.AcceptedBySpooler => "Aceptado por la cola de Windows (sin confirmación de papel)",
+        DeliveryLevel.Confirmed => "Impreso (confirmado por la impresora)",
+        _ => string.Empty,
+    };
+
+    public void Dispose()
+    {
+        _timer?.Dispose();
+        _subscription?.Dispose();
+    }
+
+    private sealed class PrinterForm
+    {
+        public int? Id { get; set; }
+        public string? Name { get; set; }
+        public PrinterType Type { get; set; }
+        public PrinterConnection Connection { get; set; }
+        public string? Target { get; set; }
+        public int PaperWidthMm { get; set; } = 80;
+    }
+}

@@ -1,0 +1,136 @@
+@page "/configuracion/tipos-impositivos"
+@attribute [Authorize(Policy = Policies.ManageCatalog)]
+@using Microsoft.AspNetCore.Authorization
+@using TPVBar.Application.Common
+@using TPVBar.Application.Features.Catalog
+@inject UseCaseRunner Runner
+
+<PageTitle>Tipos impositivos · TPVBar</PageTitle>
+
+<main class="page page--wide">
+    <h1>Tipos impositivos</h1>
+    <p class="alert">
+        Los porcentajes y sus fechas de vigencia son configuración del propietario. TPVBar no los fija: confírmelos
+        con su asesor fiscal. Cada venta conserva el porcentaje vigente cuando se hizo.
+    </p>
+
+    @if (_error is not null)
+    {
+        <p class="alert alert--error" role="alert">@_error</p>
+    }
+    @if (_info is not null)
+    {
+        <p class="alert alert--ok" role="status">@_info</p>
+    }
+
+    <div class="split">
+        <section aria-labelledby="lista">
+            <h2 id="lista">Configurados</h2>
+            @if (_rates is null)
+            {
+                <p>Cargando…</p>
+            }
+            else if (_rates.Count == 0)
+            {
+                <p class="alert">No hay tipos impositivos. Sin ellos no se pueden vender productos.</p>
+            }
+            else
+            {
+                <table class="grid">
+                    <thead><tr><th>Nombre</th><th class="num">%</th><th>Desde</th><th>Hasta</th><th>Estado</th><th><span class="sr-only">Acciones</span></th></tr></thead>
+                    <tbody>
+                        @foreach (var r in _rates)
+                        {
+                            <tr>
+                                <td>@r.Name</td>
+                                <td class="num">@r.Rate.ToString("0.###")</td>
+                                <td>@r.ValidFrom.ToString("d")</td>
+                                <td>@(r.ValidTo?.ToString("d") ?? "—")</td>
+                                <td>@(r.IsValidToday ? "Vigente" : "No vigente")</td>
+                                <td class="actions">
+                                    @if (r.IsValidToday && r.ValidTo is null)
+                                    {
+                                        <button type="button" class="btn btn--small" @onclick="() => EndTodayAsync(r)">Finalizar hoy</button>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </section>
+
+        <section class="panel" aria-labelledby="nuevo">
+            <h2 id="nuevo">Nuevo tipo impositivo</h2>
+            <form @onsubmit="CreateAsync">
+                <label>Nombre <input type="text" maxlength="60" required @bind="_name" /></label>
+                <label>Porcentaje <input type="number" step="0.001" min="0" max="100" required @bind="_rate" /></label>
+                <label>Vigente desde <input type="date" required @bind="_from" /></label>
+                <label>Vigente hasta (opcional) <input type="date" @bind="_to" /></label>
+                <div class="form-actions">
+                    <button type="submit" class="btn btn--primary" disabled="@_busy">Crear</button>
+                </div>
+            </form>
+        </section>
+    </div>
+</main>
+
+@code {
+    private IReadOnlyList<TaxRateRow>? _rates;
+    private string? _name;
+    private decimal _rate;
+    private DateTime _from = DateTime.Today;
+    private DateTime? _to;
+    private string? _error;
+    private string? _info;
+    private bool _busy;
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var result = await Runner.RunAsync<CatalogService, IReadOnlyList<TaxRateRow>>((s, ct) => s.ListTaxRatesAsync(ct));
+        _rates = result.Value;
+        _error = result.Error;
+    }
+
+    private async Task CreateAsync()
+    {
+        if (_busy)
+        {
+            return;
+        }
+
+        _busy = true;
+        _info = null;
+        try
+        {
+            var from = DateOnly.FromDateTime(_from);
+            DateOnly? to = _to is { } t ? DateOnly.FromDateTime(t) : null;
+            var name = _name ?? string.Empty;
+            var rate = _rate;
+            var result = await Runner.RunAsync<CatalogService>((s, ct) => s.CreateTaxRateAsync(name, rate, from, to, ct));
+            _error = result.Error;
+            if (result.Ok)
+            {
+                _info = "Tipo impositivo creado.";
+                _name = null;
+                _rate = 0;
+                _to = null;
+                await LoadAsync();
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task EndTodayAsync(TaxRateRow row)
+    {
+        var today = BusinessTime.Today(TimeProvider.System);
+        var result = await Runner.RunAsync<CatalogService>((s, ct) => s.EndTaxRateAsync(row.Id, today, ct));
+        _error = result.Error;
+        await LoadAsync();
+    }
+}

@@ -1,0 +1,169 @@
+@page "/mesas"
+@attribute [Authorize(Policy = Policies.TakeOrders)]
+@implements IDisposable
+@using Microsoft.AspNetCore.Authorization
+@using TPVBar.Application.Common
+@using TPVBar.Application.Features.Orders
+@inject UseCaseRunner Runner
+@inject NavigationManager Navigation
+@inject OperationEventBus Bus
+
+<PageTitle>Mesas · TPVBar</PageTitle>
+
+<main class="page">
+    <h1>Mesas</h1>
+
+    @if (_error is not null)
+    {
+        <p class="alert alert--error" role="alert">@_error</p>
+    }
+
+    @if (_floor is null)
+    {
+        <p>Cargando mesas…</p>
+    }
+    else if (_floor.Zones.Count == 0)
+    {
+        <p class="alert">No hay zonas ni mesas configuradas. Un encargado puede crearlas en «Zonas y mesas».</p>
+    }
+    else
+    {
+        <p class="legend" aria-label="Leyenda de estados">
+            <span class="badge badge--free">Libre</span>
+            <span class="badge badge--busy">Ocupada</span>
+            <span class="badge badge--bill">Pendiente de cobro</span>
+        </p>
+
+        @foreach (var zone in _floor.Zones)
+        {
+            <section class="zone" aria-labelledby="zona-@zone.Id">
+                <h2 id="zona-@zone.Id">@zone.Name</h2>
+                <div class="table-grid">
+                    @foreach (var table in zone.Tables)
+                    {
+                        <button type="button" class="table-card table-card--@StatusClass(table.Status)"
+                                disabled="@_busy" @onclick="() => OpenAsync(table)">
+                            <span class="table-card__name">@table.Name</span>
+                            <span class="table-card__status">@StatusText(table.Status)</span>
+                            @if (table.OpenedAt is { } opened)
+                            {
+                                <span class="table-card__detail">
+                                    @((int)(DateTimeOffset.UtcNow - opened).TotalMinutes) min · @table.Total?.ToString("C")
+                                </span>
+                            }
+                            else
+                            {
+                                <span class="table-card__detail">@table.Capacity pers.</span>
+                            }
+                        </button>
+                    }
+                </div>
+            </section>
+        }
+    }
+</main>
+
+@code {
+    private FloorView? _floor;
+    private string? _error;
+    private bool _busy;
+    private Timer? _timer;
+    private IDisposable? _subscription;
+    private int _reloadPending;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+
+        // Tiempo real: los avisos solo dicen "algo cambió" y aquí se vuelve a leer el estado de la base de datos,
+        // así que un aviso repetido o perdido no puede duplicar ni corromper nada.
+        _subscription = Bus.Subscribe(OnEventAsync);
+
+        // Refresco de respaldo por si se pierde algún aviso (p. ej. tras una reconexión).
+        _timer = new Timer(_ => _ = ScheduleReloadAsync(), null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
+    }
+
+    private Task OnEventAsync(OperationEvent e) =>
+        e.Name is OperationEventNames.TableStatusChanged or OperationEventNames.OrderUpdated or OperationEventNames.OrderSentToKitchen
+            ? ScheduleReloadAsync()
+            : Task.CompletedTask;
+
+    private async Task ScheduleReloadAsync()
+    {
+        if (Interlocked.Exchange(ref _reloadPending, 1) == 1)
+        {
+            return;
+        }
+
+        await Task.Delay(100); // agrupa ráfagas de avisos en una sola lectura
+        Interlocked.Exchange(ref _reloadPending, 0);
+        await InvokeAsync(async () =>
+        {
+            if (!_busy)
+            {
+                await LoadAsync();
+                StateHasChanged();
+            }
+        });
+    }
+
+    private async Task LoadAsync()
+    {
+        var result = await Runner.RunAsync<FloorService, FloorView>((s, ct) => s.GetFloorAsync(ct));
+        if (result.Ok)
+        {
+            _floor = result.Value;
+            _error = null;
+        }
+        else
+        {
+            _error = result.Error;
+        }
+    }
+
+    private async Task OpenAsync(TableCardView table)
+    {
+        if (_busy)
+        {
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var result = await Runner.RunAsync<FloorService, long>((s, ct) => s.OpenTableAsync(table.Id, 1, ct));
+            if (result.Ok)
+            {
+                Navigation.NavigateTo($"/comanda/{result.Value}");
+                return;
+            }
+
+            _error = result.Error;
+            await LoadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static string StatusClass(TableStatus status) => status switch
+    {
+        TableStatus.Free => "free",
+        TableStatus.Occupied => "busy",
+        _ => "bill",
+    };
+
+    private static string StatusText(TableStatus status) => status switch
+    {
+        TableStatus.Free => "Libre",
+        TableStatus.Occupied => "Ocupada",
+        _ => "Pendiente de cobro",
+    };
+
+    public void Dispose()
+    {
+        _timer?.Dispose();
+        _subscription?.Dispose();
+    }
+}

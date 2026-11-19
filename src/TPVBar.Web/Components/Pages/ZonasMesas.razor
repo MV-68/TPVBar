@@ -1,0 +1,217 @@
+@page "/configuracion/zonas-mesas"
+@attribute [Authorize(Policy = Policies.ManageCatalog)]
+@using Microsoft.AspNetCore.Authorization
+@using TPVBar.Application.Features.Catalog
+@inject UseCaseRunner Runner
+
+<PageTitle>Zonas y mesas · TPVBar</PageTitle>
+
+<main class="page page--wide">
+    <h1>Zonas y mesas</h1>
+
+    @if (_error is not null)
+    {
+        <p class="alert alert--error" role="alert">@_error</p>
+    }
+    @if (_info is not null)
+    {
+        <p class="alert alert--ok" role="status">@_info</p>
+    }
+
+    <div class="split">
+        <section aria-labelledby="sala">
+            <h2 id="sala">Sala</h2>
+            <button type="button" class="btn btn--primary" @onclick="NewZone">Nueva zona</button>
+
+            @if (_zones is null)
+            {
+                <p>Cargando…</p>
+            }
+            else
+            {
+                @foreach (var zone in _zones)
+                {
+                    <article class="card @(zone.IsActive ? "" : "row--inactive")">
+                        <header>
+                            <h3>@zone.Name @if (!zone.IsActive) { <em>(inactiva)</em> }</h3>
+                            <button type="button" class="btn btn--small" @onclick="() => EditZone(zone)">Editar</button>
+                            <button type="button" class="btn btn--small" @onclick="() => ToggleZoneAsync(zone)">@(zone.IsActive ? "Desactivar" : "Activar")</button>
+                            <button type="button" class="btn btn--small" @onclick="() => NewTable(zone)">Nueva mesa</button>
+                        </header>
+                        <ul class="plain">
+                            @foreach (var table in zone.Tables)
+                            {
+                                <li class="@(table.IsActive ? "" : "row--inactive")">
+                                    @table.Name · @table.Capacity pers. @if (!table.IsActive) { <em>(inactiva)</em> }
+                                    <button type="button" class="btn btn--small" @onclick="() => EditTable(table)">Editar</button>
+                                    <button type="button" class="btn btn--small" @onclick="() => ToggleTableAsync(table)">@(table.IsActive ? "Desactivar" : "Activar")</button>
+                                </li>
+                            }
+                        </ul>
+                    </article>
+                }
+            }
+        </section>
+
+        @if (_zoneForm is not null)
+        {
+            <section class="panel" aria-labelledby="form-zona">
+                <h2 id="form-zona">@(_zoneForm.Id is null ? "Nueva zona" : "Editar zona")</h2>
+                <form @onsubmit="SaveZoneAsync">
+                    <label>Nombre <input type="text" maxlength="80" required @bind="_zoneForm.Name" /></label>
+                    <label>Orden <input type="number" @bind="_zoneForm.DisplayOrder" /></label>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn--primary" disabled="@_busy">Guardar</button>
+                        <button type="button" class="btn" @onclick="() => _zoneForm = null">Cancelar</button>
+                    </div>
+                </form>
+            </section>
+        }
+
+        @if (_tableForm is not null)
+        {
+            <section class="panel" aria-labelledby="form-mesa">
+                <h2 id="form-mesa">@(_tableForm.Id is null ? "Nueva mesa" : "Editar mesa")</h2>
+                <form @onsubmit="SaveTableAsync">
+                    <label>Zona
+                        <select @bind="_tableForm.ZoneId">
+                            @foreach (var z in _zones ?? []) { <option value="@z.Id">@z.Name</option> }
+                        </select>
+                    </label>
+                    <label>Nombre <input type="text" maxlength="40" required @bind="_tableForm.Name" /></label>
+                    <label>Capacidad <input type="number" min="1" max="99" required @bind="_tableForm.Capacity" /></label>
+                    <label>Orden <input type="number" @bind="_tableForm.DisplayOrder" /></label>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn--primary" disabled="@_busy">Guardar</button>
+                        <button type="button" class="btn" @onclick="() => _tableForm = null">Cancelar</button>
+                    </div>
+                </form>
+            </section>
+        }
+    </div>
+</main>
+
+@code {
+    private IReadOnlyList<ZoneRow>? _zones;
+    private ZoneForm? _zoneForm;
+    private TableForm? _tableForm;
+    private string? _error;
+    private string? _info;
+    private bool _busy;
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var result = await Runner.RunAsync<CatalogService, IReadOnlyList<ZoneRow>>((s, ct) => s.ListZonesAsync(ct));
+        _zones = result.Value;
+        _error = result.Error;
+    }
+
+    private void NewZone()
+    {
+        _tableForm = null;
+        _zoneForm = new ZoneForm { DisplayOrder = (_zones?.Count ?? 0) + 1 };
+    }
+
+    private void EditZone(ZoneRow z)
+    {
+        _tableForm = null;
+        _zoneForm = new ZoneForm { Id = z.Id, Name = z.Name, DisplayOrder = z.DisplayOrder };
+    }
+
+    private void NewTable(ZoneRow z)
+    {
+        _zoneForm = null;
+        _tableForm = new TableForm { ZoneId = z.Id, Capacity = 4, DisplayOrder = z.Tables.Count + 1 };
+    }
+
+    private void EditTable(TableRow t)
+    {
+        _zoneForm = null;
+        _tableForm = new TableForm { Id = t.Id, ZoneId = t.ZoneId, Name = t.Name, Capacity = t.Capacity, DisplayOrder = t.DisplayOrder };
+    }
+
+    private async Task SaveZoneAsync()
+    {
+        if (_zoneForm is not { } form || _busy)
+        {
+            return;
+        }
+
+        await SaveAsync(async () =>
+        {
+            var name = form.Name ?? string.Empty;
+            return form.Id is { } id
+                ? await Runner.RunAsync<CatalogService>((s, ct) => s.UpdateZoneAsync(id, name, form.DisplayOrder, ct))
+                : await Runner.RunAsync<CatalogService>((s, ct) => s.CreateZoneAsync(name, form.DisplayOrder, ct));
+        }, () => _zoneForm = null, "Zona guardada.");
+    }
+
+    private async Task SaveTableAsync()
+    {
+        if (_tableForm is not { } form || _busy)
+        {
+            return;
+        }
+
+        await SaveAsync(async () =>
+        {
+            var name = form.Name ?? string.Empty;
+            return form.Id is { } id
+                ? await Runner.RunAsync<CatalogService>((s, ct) => s.UpdateTableAsync(id, form.ZoneId, name, form.Capacity, form.DisplayOrder, ct))
+                : await Runner.RunAsync<CatalogService>((s, ct) => s.CreateTableAsync(form.ZoneId, name, form.Capacity, form.DisplayOrder, ct));
+        }, () => _tableForm = null, "Mesa guardada.");
+    }
+
+    private async Task SaveAsync(Func<Task<UiResult<bool>>> action, Action onSuccess, string message)
+    {
+        _busy = true;
+        _info = null;
+        try
+        {
+            var result = await action();
+            _error = result.Error;
+            if (result.Ok)
+            {
+                _info = message;
+                onSuccess();
+                await LoadAsync();
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ToggleZoneAsync(ZoneRow z)
+    {
+        var result = await Runner.RunAsync<CatalogService>((s, ct) => s.SetZoneActiveAsync(z.Id, !z.IsActive, ct));
+        _error = result.Error;
+        await LoadAsync();
+    }
+
+    private async Task ToggleTableAsync(TableRow t)
+    {
+        var result = await Runner.RunAsync<CatalogService>((s, ct) => s.SetTableActiveAsync(t.Id, !t.IsActive, ct));
+        _error = result.Error;
+        await LoadAsync();
+    }
+
+    private sealed class ZoneForm
+    {
+        public int? Id { get; set; }
+        public string? Name { get; set; }
+        public int DisplayOrder { get; set; }
+    }
+
+    private sealed class TableForm
+    {
+        public int? Id { get; set; }
+        public int ZoneId { get; set; }
+        public string? Name { get; set; }
+        public int Capacity { get; set; }
+        public int DisplayOrder { get; set; }
+    }
+}

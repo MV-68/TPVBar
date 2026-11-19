@@ -1,0 +1,14 @@
+﻿<Router AppAssembly="typeof(Program).Assembly" NotFoundPage="typeof(Pages.NotFound)">
+    <Found Context="routeData">
+        <AuthorizeRouteView RouteData="routeData" DefaultLayout="typeof(Layout.MainLayout)">
+            <NotAuthorized>
+                <main class="phase-status">
+                    <h1>Acceso denegado</h1>
+                    <p>No tiene permiso para realizar esta operación. Si cree que es un error, avise al encargado.</p>
+                    <p><a href="/">Volver al inicio</a></p>
+                </main>
+            </NotAuthorized>
+        </AuthorizeRouteView>
+        <FocusOnNavigate RouteData="routeData" Selector="h1" />
+    </Found>
+</Router>

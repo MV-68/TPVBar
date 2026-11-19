@@ -1,0 +1,269 @@
+@page "/estadisticas"
+@attribute [Authorize(Policy = Policies.ViewReports)]
+@using Microsoft.AspNetCore.Authorization
+@using TPVBar.Application.Features.Reports
+@inject UseCaseRunner Runner
+
+<PageTitle>Estadísticas · TPVBar</PageTitle>
+
+<main class="page page--wide">
+    <h1>Estadísticas</h1>
+
+    <form class="period" @onsubmit="LoadAsync" aria-label="Periodo del informe">
+        <div class="quick">
+            <button type="button" class="btn btn--small" @onclick="() => SetPeriodAsync(Today, Today)">Hoy</button>
+            <button type="button" class="btn btn--small" @onclick="() => SetPeriodAsync(Today.AddDays(-1), Today.AddDays(-1))">Ayer</button>
+            <button type="button" class="btn btn--small" @onclick="() => SetPeriodAsync(StartOfWeek(Today), Today)">Esta semana</button>
+            <button type="button" class="btn btn--small" @onclick="() => SetPeriodAsync(new DateOnly(Today.Year, Today.Month, 1), Today)">Este mes</button>
+            <button type="button" class="btn btn--small" @onclick="PreviousMonthAsync">Mes anterior</button>
+        </div>
+        <label>Desde <input type="date" required @bind="_from" /></label>
+        <label>Hasta <input type="date" required @bind="_to" /></label>
+        <label>Agrupar por
+            <select @bind="_granularity">
+                <option value="@Granularity.Day">Día</option>
+                <option value="@Granularity.Week">Semana</option>
+                <option value="@Granularity.Month">Mes</option>
+            </select>
+        </label>
+        <button type="submit" class="btn btn--primary" disabled="@_busy">Ver informe</button>
+    </form>
+
+    @if (_error is not null) { <p class="alert alert--error" role="alert">@_error</p> }
+
+    @if (_report is null)
+    {
+        @if (_error is null) { <p>Cargando…</p> }
+    }
+    else
+    {
+        var t = _report.Totals;
+        <p class="muted">
+            Del @_report.Range.From.ToString("dd/MM/yyyy") al @_report.Range.To.ToString("dd/MM/yyyy") (días y horas locales). Un <strong>ticket</strong> es una
+            comanda cobrada cuyo cierre cae en el periodo. Las <strong>ventas</strong> llevan IVA incluido; los <strong>cobros</strong> (dinero recibido) son otra magnitud.
+        </p>
+
+        <section aria-labelledby="resumen">
+            <h2 id="resumen">Resumen</h2>
+            <div class="tiles">
+                <div class="tile"><span class="tile__label">Tickets</span><span class="tile__value">@t.Tickets</span></div>
+                <div class="tile"><span class="tile__label">Ventas (IVA incl.)</span><span class="tile__value">@t.Sales.ToString("C")</span></div>
+                <div class="tile"><span class="tile__label">Ticket medio</span><span class="tile__value">@t.AverageTicket.ToString("C")</span></div>
+                <div class="tile"><span class="tile__label">Devoluciones</span><span class="tile__value">@t.Refunds.ToString("C")</span></div>
+                <div class="tile tile--main"><span class="tile__label">Neto tras devoluciones</span><span class="tile__value">@t.NetAfterRefunds.ToString("C")</span></div>
+            </div>
+            <table class="grid grid--compact">
+                <caption class="sr-only">Desglose de ventas</caption>
+                <tbody>
+                    <tr><th scope="row">Ventas brutas (antes de descuentos)</th><td class="num">@t.GrossSales.ToString("C")</td></tr>
+                    <tr><th scope="row">Descuentos</th><td class="num">@t.Discounts.ToString("C")</td></tr>
+                    <tr><th scope="row">Ventas (IVA incluido)</th><td class="num">@t.Sales.ToString("C")</td></tr>
+                    <tr><th scope="row">Base imponible</th><td class="num">@t.BaseAmount.ToString("C")</td></tr>
+                    <tr><th scope="row">IVA</th><td class="num">@t.Tax.ToString("C")</td></tr>
+                    <tr><th scope="row">Devoluciones (no se desglosan por IVA)</th><td class="num">@t.Refunds.ToString("C")</td></tr>
+                </tbody>
+            </table>
+        </section>
+
+        <section aria-labelledby="exportar">
+            <h2 id="exportar">Exportar (CSV para Excel)</h2>
+            <p class="quick">
+                <a class="btn btn--small btn--link" href="@Export("ventas-por-periodo")" download>Ventas por @GranularityText</a>
+                <a class="btn btn--small btn--link" href="@Export("ventas-por-producto")" download>Ventas por producto</a>
+                <a class="btn btn--small btn--link" href="@Export("cobros-por-metodo")" download>Cobros por método de pago</a>
+            </p>
+            <p class="muted">Formato español (separador «;», coma decimal). XLSX no está disponible todavía.</p>
+        </section>
+
+        <section aria-labelledby="serie">
+            <h2 id="serie">Ventas por @GranularityText</h2>
+            @{ var series = _report.Series(_granularity); var maxSales = series.Count == 0 ? 0 : series.Max(s => s.Sales); }
+            <table class="grid">
+                <thead><tr><th>Periodo</th><th class="num">Tickets</th><th class="num">Ventas</th><th class="num">Ticket medio</th><th aria-hidden="true"></th></tr></thead>
+                <tbody>
+                    @foreach (var row in series)
+                    {
+                        <tr><td>@row.Label</td><td class="num">@row.Tickets</td><td class="num">@row.Sales.ToString("C")</td><td class="num">@row.AverageTicket.ToString("C")</td><td class="barcell"><Bar Value="row.Sales" Max="maxSales" /></td></tr>
+                    }
+                </tbody>
+            </table>
+        </section>
+
+        <section aria-labelledby="horas">
+            <h2 id="horas">Ventas por franja horaria</h2>
+            @if (_report.Hours.Count == 0) { <p class="muted">Sin tickets en el periodo.</p> }
+            else
+            {
+                var maxHour = _report.Hours.Max(h => h.Sales);
+                <table class="grid">
+                    <thead><tr><th>Hora</th><th class="num">Tickets</th><th class="num">Ventas</th><th aria-hidden="true"></th></tr></thead>
+                    <tbody>
+                        @foreach (var h in _report.Hours)
+                        {
+                            <tr><td>@($"{h.Hour:00}:00–{h.Hour:00}:59")</td><td class="num">@h.Tickets</td><td class="num">@h.Sales.ToString("C")</td><td class="barcell"><Bar Value="h.Sales" Max="maxHour" /></td></tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </section>
+
+        <section aria-labelledby="metodos">
+            <h2 id="metodos">Cobros por método de pago</h2>
+            <p class="muted">Dinero recibido y devuelto en el periodo (por fecha del cobro). No coincide necesariamente con las ventas: depende de cuándo se cobra.</p>
+            <table class="grid">
+                <thead><tr><th>Método</th><th class="num">Cobros</th><th class="num">Devoluciones</th><th class="num">Neto</th></tr></thead>
+                <tbody>
+                    @foreach (var m in _report.Methods)
+                    {
+                        <tr><td>@m.Name</td><td class="num">@m.Payments.ToString("C")</td><td class="num">@m.Refunds.ToString("C")</td><td class="num">@m.Net.ToString("C")</td></tr>
+                    }
+                    @if (_report.Methods.Count == 0) { <tr><td colspan="4" class="muted">Sin cobros en el periodo.</td></tr> }
+                </tbody>
+            </table>
+        </section>
+
+        <div class="split">
+            <section aria-labelledby="productos">
+                <h2 id="productos">Productos más vendidos</h2>
+                <table class="grid">
+                    <thead><tr><th>Producto</th><th>Categoría</th><th class="num">Unidades</th><th class="num">Importe</th></tr></thead>
+                    <tbody>
+                        @foreach (var p in _report.Products.Take(20))
+                        {
+                            <tr><td>@p.Name</td><td>@p.Category</td><td class="num">@p.Quantity.ToString("0.###")</td><td class="num">@p.Amount.ToString("C")</td></tr>
+                        }
+                        @if (_report.Products.Count == 0) { <tr><td colspan="4" class="muted">Sin ventas en el periodo.</td></tr> }
+                    </tbody>
+                </table>
+            </section>
+            <section aria-labelledby="categorias">
+                <h2 id="categorias">Por categoría</h2>
+                <table class="grid">
+                    <thead><tr><th>Categoría</th><th class="num">Unidades</th><th class="num">Importe</th></tr></thead>
+                    <tbody>
+                        @foreach (var c in _report.Categories)
+                        {
+                            <tr><td>@c.Category</td><td class="num">@c.Quantity.ToString("0.###")</td><td class="num">@c.Amount.ToString("C")</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </section>
+        </div>
+
+        <section aria-labelledby="anulaciones">
+            <h2 id="anulaciones">Anulaciones y devoluciones</h2>
+            <p>Líneas anuladas tras enviarse: <strong>@_report.VoidCount</strong> por <strong>@_report.VoidAmount.ToString("C")</strong>.
+               Dinero devuelto: <strong>@t.Refunds.ToString("C")</strong>.</p>
+            @if (_report.Voids.Count > 0)
+            {
+                <table class="grid">
+                    <thead><tr><th>Fecha</th><th>Producto</th><th class="num">Uds.</th><th class="num">Importe</th><th>Motivo</th><th>Usuario</th></tr></thead>
+                    <tbody>
+                        @foreach (var v in _report.Voids)
+                        {
+                            <tr><td>@BusinessTime.ToLocal(v.At).ToString("dd/MM HH:mm")</td><td>@v.Product</td><td class="num">@v.Quantity.ToString("0.###")</td><td class="num">@v.Amount.ToString("C")</td><td>@v.Reason</td><td>@v.By</td></tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </section>
+
+        <section aria-labelledby="diferencias">
+            <h2 id="diferencias">Diferencias de caja</h2>
+            @if (_report.CashDifferences.Count == 0) { <p class="muted">No se cerró ninguna caja en el periodo.</p> }
+            else
+            {
+                <table class="grid">
+                    <thead><tr><th>Cierre</th><th class="num">Esperado</th><th class="num">Contado</th><th class="num">Diferencia</th></tr></thead>
+                    <tbody>
+                        @foreach (var d in _report.CashDifferences)
+                        {
+                            <tr><td>Sesión @d.SessionId · @BusinessTime.ToLocal(d.ClosedAt).ToString("dd/MM HH:mm")</td><td class="num">@d.Expected.ToString("C")</td><td class="num">@d.Counted.ToString("C")</td>
+                                <td class="num @(d.Difference < 0 ? "neg" : "")">@d.Difference.ToString("C")@(d.Difference == 0 ? " · cuadra" : d.Difference < 0 ? " · faltan" : " · sobran")</td></tr>
+                        }
+                    </tbody>
+                    <tfoot><tr><th colspan="3">Total</th><th class="num">@_report.CashDifferenceTotal.ToString("C")</th></tr></tfoot>
+                </table>
+            }
+        </section>
+
+        <section aria-labelledby="stockbajo">
+            <h2 id="stockbajo">Productos con stock bajo</h2>
+            @if (_report.LowStock.Count == 0) { <p class="muted">Ningún producto bajo mínimos.</p> }
+            else
+            {
+                <ul class="plain">
+                    @foreach (var s in _report.LowStock)
+                    {
+                        <li><strong>@s.Name</strong> — @s.Quantity.ToString("0.###") @s.Unit (mínimo @s.Minimum.ToString("0.###"))</li>
+                    }
+                </ul>
+            }
+        </section>
+    }
+</main>
+
+@code {
+    private SalesReport? _report;
+    private DateTime _from;
+    private DateTime _to;
+    private Granularity _granularity = Granularity.Day;
+    private string? _error;
+    private bool _busy;
+
+    private static DateOnly Today => BusinessTime.Today(TimeProvider.System);
+
+    private string GranularityText => _granularity switch { Granularity.Week => "semana", Granularity.Month => "mes", _ => "día" };
+
+    protected override async Task OnInitializedAsync()
+    {
+        _from = Today.ToDateTime(TimeOnly.MinValue);
+        _to = _from;
+        await LoadAsync();
+    }
+
+    private static DateOnly StartOfWeek(DateOnly day) => day.AddDays(-(((int)day.DayOfWeek + 6) % 7));
+
+    private Task PreviousMonthAsync()
+    {
+        var first = new DateOnly(Today.Year, Today.Month, 1).AddMonths(-1);
+        return SetPeriodAsync(first, first.AddMonths(1).AddDays(-1));
+    }
+
+    private async Task SetPeriodAsync(DateOnly from, DateOnly to)
+    {
+        _from = from.ToDateTime(TimeOnly.MinValue);
+        _to = to.ToDateTime(TimeOnly.MinValue);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        if (_busy)
+        {
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var (from, to) = (DateOnly.FromDateTime(_from), DateOnly.FromDateTime(_to));
+            var result = await Runner.RunAsync<ReportService, SalesReport>((s, ct) => s.GetSalesReportAsync(from, to, ct));
+            _error = result.Error;
+            if (result.Ok)
+            {
+                _report = result.Value;
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private string Export(string report)
+    {
+        var agrupar = _granularity switch { Granularity.Week => "semana", Granularity.Month => "mes", _ => "dia" };
+        return $"/export/{report}.csv?desde={_report!.Range.From:yyyy-MM-dd}&hasta={_report.Range.To:yyyy-MM-dd}&agrupar={agrupar}";
+    }
+}

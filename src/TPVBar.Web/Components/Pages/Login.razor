@@ -1,0 +1,49 @@
+@page "/login"
+@attribute [AllowAnonymous]
+@attribute [ExcludeFromInteractiveRouting]
+@layout EmptyLayout
+@using Microsoft.AspNetCore.Authorization
+
+<PageTitle>Iniciar sesión · TPVBar</PageTitle>
+
+<main class="login">
+    <h1>TPVBar</h1>
+    <p class="login__lead">Inicie sesión para continuar</p>
+
+    @if (ErrorMessage is not null)
+    {
+        <p class="login__error" role="alert">@ErrorMessage</p>
+    }
+
+    <form method="post" action="/auth/login">
+        <AntiforgeryToken />
+        <input type="hidden" name="returnUrl" value="@ReturnUrl" />
+
+        <label for="username">Usuario</label>
+        <input id="username" name="username" type="text" autocomplete="username" autocapitalize="none"
+               spellcheck="false" maxlength="50" required autofocus />
+
+        <label for="password">Contraseña</label>
+        <input id="password" name="password" type="password" autocomplete="current-password"
+               maxlength="128" required />
+
+        <button type="submit" class="btn btn--primary">Entrar</button>
+    </form>
+</main>
+
+@code {
+    [SupplyParameterFromQuery(Name = "error")]
+    private string? Error { get; set; }
+
+    [SupplyParameterFromQuery(Name = "returnUrl")]
+    private string? ReturnUrl { get; set; }
+
+    // Mensaje deliberadamente genérico: no se revela si el usuario existe.
+    private string? ErrorMessage => Error switch
+    {
+        "locked" => "Acceso bloqueado temporalmente por demasiados intentos. Espere unos minutos o avise al encargado.",
+        "rate" => "Demasiados intentos desde este puesto. Espere un minuto.",
+        "invalid" => "Usuario o contraseña incorrectos.",
+        _ => null,
+    };
+}

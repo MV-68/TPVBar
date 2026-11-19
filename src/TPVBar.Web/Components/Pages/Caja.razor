@@ -1,0 +1,335 @@
+@page "/caja"
+@attribute [Authorize(Policy = Policies.CashAccess)]
+@implements IDisposable
+@using Microsoft.AspNetCore.Authorization
+@using TPVBar.Application.Features.Cash
+@using TPVBar.Domain.Cash
+@inject UseCaseRunner Runner
+@inject OperationEventBus Bus
+@inject AuthenticationStateProvider Authentication
+
+<PageTitle>Caja · TPVBar</PageTitle>
+
+<main class="page page--wide">
+    <h1>Caja</h1>
+
+    @if (_error is not null)
+    {
+        <p class="alert alert--error" role="alert">@_error</p>
+    }
+    @if (_info is not null)
+    {
+        <p class="alert alert--ok" role="status">@_info</p>
+    }
+
+    @if (_closed is not null)
+    {
+        <section class="panel" aria-labelledby="informe">
+            <h2 id="informe">Caja cerrada · informe de cierre</h2>
+            <dl class="totals">
+                <div><dt>Efectivo esperado</dt><dd>@_closed.ExpectedCash?.ToString("C")</dd></div>
+                <div><dt>Efectivo contado</dt><dd>@_closed.CountedCash?.ToString("C")</dd></div>
+                <div class="totals__grand"><dt>Diferencia</dt><dd>@DifferenceText(_closed.Difference ?? 0)</dd></div>
+            </dl>
+            @if (_closedPrintInfo is not null) { <p class="muted">@_closedPrintInfo</p> }
+            <SessionDetail Session="_closed" />
+            <button type="button" class="btn btn--primary" @onclick="DismissReport">Entendido</button>
+        </section>
+    }
+    else if (_loading)
+    {
+        <p>Cargando…</p>
+    }
+    else if (_session is null)
+    {
+        <section class="panel" aria-labelledby="abrir">
+            <h2 id="abrir">Caja cerrada</h2>
+            @if (_canOpenClose)
+            {
+                <p>Cuente el efectivo del cajón y abra la caja con ese fondo inicial.</p>
+                <form @onsubmit="OpenAsync">
+                    <label>Fondo inicial (€) <input type="number" step="0.01" min="0" required @bind="_opening" /></label>
+                    <div class="form-actions"><button type="submit" class="btn btn--primary btn--big" disabled="@_busy">Abrir caja</button></div>
+                </form>
+            }
+            else
+            {
+                <p class="alert">No se puede cobrar hasta que un encargado abra la caja.</p>
+            }
+        </section>
+    }
+    else
+    {
+        <div class="split">
+            <section aria-labelledby="turno">
+                <h2 id="turno">Caja abierta</h2>
+                <SessionDetail Session="_session" />
+
+                <h2>Cobros de esta sesión</h2>
+                @if (_payments is null || _payments.Count == 0)
+                {
+                    <p class="muted">Todavía no hay cobros.</p>
+                }
+                else
+                {
+                    <table class="grid">
+                        <thead><tr><th>Hora</th><th>Mesa</th><th>Método</th><th class="num">Importe</th><th class="num">Devuelto</th><th><span class="sr-only">Acciones</span></th></tr></thead>
+                        <tbody>
+                            @foreach (var p in _payments)
+                            {
+                                <tr>
+                                    <td>@BusinessTime.ToLocal(p.PaidAt).ToString("HH:mm")</td>
+                                    <td>@p.TableLabel (nº @p.OrderId)</td>
+                                    <td>@p.Method @if (!string.IsNullOrEmpty(p.Reference)) { <small>ref. @p.Reference</small> }</td>
+                                    <td class="num">@p.Amount.ToString("C")</td>
+                                    <td class="num">@(p.Refunded > 0 ? p.Refunded.ToString("C") : "—")</td>
+                                    <td class="actions">
+                                        @if (_canRefund && p.Refundable > 0)
+                                        {
+                                            <button type="button" class="btn btn--small" disabled="@_busy" @onclick="() => StartRefund(p)">Devolver</button>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </section>
+
+            <div>
+                @if (_refund is not null)
+                {
+                    <section class="panel" aria-labelledby="devolucion">
+                        <h2 id="devolucion">Devolución</h2>
+                        <p class="muted">Cobro de @_refund.Row.Amount.ToString("C") con @_refund.Row.Method. Se devuelve por el mismo método y se imputa a la caja actual.</p>
+                        <form @onsubmit="RefundAsync">
+                            <label>Importe a devolver (€) <input type="number" step="0.01" min="0.01" max="@_refund.Row.Refundable.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)" required @bind="_refund.Amount" /></label>
+                            <label>Motivo (obligatorio) <input type="text" maxlength="200" required @bind="_refund.Reason" /></label>
+                            <div class="form-actions">
+                                <button type="submit" class="btn btn--danger" disabled="@(_busy || string.IsNullOrWhiteSpace(_refund.Reason))">Confirmar devolución</button>
+                                <button type="button" class="btn" @onclick="() => _refund = null">Cancelar</button>
+                            </div>
+                        </form>
+                    </section>
+                }
+
+                @if (_canOpenClose)
+                {
+                    <section class="panel" aria-labelledby="movimiento">
+                        <h2 id="movimiento">Entrada / salida de efectivo</h2>
+                        <form @onsubmit="MovementAsync">
+                            <label>Tipo
+                                <select @bind="_movementType">
+                                    <option value="@CashMovementType.CashOut">Salida (retirada, pago a proveedor…)</option>
+                                    <option value="@CashMovementType.CashIn">Entrada (aporte de cambio…)</option>
+                                </select>
+                            </label>
+                            <label>Importe (€) <input type="number" step="0.01" min="0.01" required @bind="_movementAmount" /></label>
+                            <label>Concepto <input type="text" maxlength="200" required @bind="_movementConcept" /></label>
+                            <div class="form-actions"><button type="submit" class="btn btn--primary" disabled="@_busy">Registrar</button></div>
+                        </form>
+                    </section>
+
+                    <section class="panel" aria-labelledby="cierre">
+                        <h2 id="cierre">Cerrar caja</h2>
+                        <p class="muted">Recuento a ciegas: cuente el efectivo del cajón y escríbalo. El efectivo esperado se calcula al cerrar.</p>
+                        <label>Efectivo contado (€) <input type="number" step="0.01" min="0" @bind="_counted" @bind:after="() => _confirmClose = false" /></label>
+                        <label>Notas (opcional) <input type="text" maxlength="500" @bind="_notes" /></label>
+                        @if (!_confirmClose)
+                        {
+                            <button type="button" class="btn btn--primary btn--big" disabled="@(_busy || _counted is null)" @onclick="() => _confirmClose = true">Cerrar caja</button>
+                        }
+                        else
+                        {
+                            <div class="confirm" role="alertdialog" aria-label="Confirmar cierre">
+                                <p>¿Cerrar la caja con <strong>@_counted?.ToString("C")</strong> contados? No se podrá cobrar hasta abrir una nueva.</p>
+                                <div class="form-actions">
+                                    <button type="button" class="btn btn--danger" disabled="@_busy" @onclick="CloseAsync">Sí, cerrar caja</button>
+                                    <button type="button" class="btn" @onclick="() => _confirmClose = false">Volver</button>
+                                </div>
+                            </div>
+                        }
+                    </section>
+                }
+            </div>
+        </div>
+    }
+</main>
+
+@code {
+    private CashSessionView? _session;
+    private CashSessionView? _closed;
+    private string? _closedPrintInfo;
+    private IReadOnlyList<PaymentRow>? _payments;
+    private bool _loading = true;
+    private bool _busy;
+    private bool _canOpenClose;
+    private bool _canRefund;
+    private string? _error;
+    private string? _info;
+    private decimal _opening;
+    private CashMovementType _movementType = CashMovementType.CashOut;
+    private decimal _movementAmount;
+    private string? _movementConcept;
+    private decimal? _counted;
+    private string? _notes;
+    private bool _confirmClose;
+    private RefundForm? _refund;
+    private IDisposable? _subscription;
+    private int _reloadPending;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = (await Authentication.GetAuthenticationStateAsync()).User;
+        _canOpenClose = user.HasClaim(TpvClaimTypes.Permission, nameof(TPVBar.Domain.Security.Permission.OpenCloseCash));
+        _canRefund = user.HasClaim(TpvClaimTypes.Permission, nameof(TPVBar.Domain.Security.Permission.PerformRefunds));
+        await LoadAsync();
+        _subscription = Bus.Subscribe(e => e.Name is OperationEventNames.CashSessionChanged or OperationEventNames.PaymentRegistered ? ScheduleReloadAsync() : Task.CompletedTask);
+    }
+
+    private async Task ScheduleReloadAsync()
+    {
+        if (Interlocked.Exchange(ref _reloadPending, 1) == 1)
+        {
+            return;
+        }
+
+        await Task.Delay(150);
+        Interlocked.Exchange(ref _reloadPending, 0);
+        await InvokeAsync(async () =>
+        {
+            if (!_busy && _closed is null)
+            {
+                await LoadAsync();
+                StateHasChanged();
+            }
+        });
+    }
+
+    private async Task LoadAsync()
+    {
+        var session = await Runner.RunAsync<CashService, CashSessionView?>((s, ct) => s.GetCurrentAsync(ct));
+        var payments = await Runner.RunAsync<CashService, IReadOnlyList<PaymentRow>>((s, ct) => s.ListSessionPaymentsAsync(ct));
+        _session = session.Value;
+        _payments = payments.Value;
+        _error ??= session.Error;
+        _loading = false;
+    }
+
+    private async Task ActAsync(Func<Task<UiResult<bool>>> action, string? success)
+    {
+        if (_busy)
+        {
+            return;
+        }
+
+        _busy = true;
+        _info = null;
+        _error = null;
+        try
+        {
+            var result = await action();
+            _error = result.Error;
+            if (result.Ok)
+            {
+                _info = success;
+            }
+
+            await LoadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private Task OpenAsync() => ActAsync(() => Runner.RunAsync<CashService>((s, ct) => s.OpenAsync(_opening, ct)), "Caja abierta.");
+
+    private Task MovementAsync() => ActAsync(async () =>
+    {
+        var (type, amount, concept) = (_movementType, _movementAmount, _movementConcept ?? string.Empty);
+        var result = await Runner.RunAsync<CashService>((s, ct) => s.AddMovementAsync(type, amount, concept, ct));
+        if (result.Ok)
+        {
+            _movementAmount = 0;
+            _movementConcept = null;
+        }
+
+        return result;
+    }, "Movimiento registrado.");
+
+    private void StartRefund(PaymentRow row) => _refund = new RefundForm { Row = row, Amount = row.Refundable };
+
+    private Task RefundAsync() => ActAsync(async () =>
+    {
+        var form = _refund!;
+        var requestId = form.RequestId;
+        var result = await Runner.RunAsync<PaymentService>((s, ct) => s.RefundAsync(form.Row.Id, form.Amount, form.Reason ?? string.Empty, requestId, ct));
+        if (result.Ok)
+        {
+            _refund = null;
+        }
+
+        return result;
+    }, "Devolución registrada.");
+
+    private async Task CloseAsync()
+    {
+        if (_busy || _counted is not { } counted)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            var notes = _notes;
+            var result = await Runner.RunAsync<CashService, CloseResult>((s, ct) => s.CloseAsync(counted, notes, ct));
+            if (result.Ok)
+            {
+                _closed = result.Value!.Report;
+                _closedPrintInfo = result.Value.ReportPrinted
+                    ? "Resumen de cierre enviado a la cola de impresión (documento interno)."
+                    : "No hay impresora de tickets configurada: no se ha impreso el resumen.";
+                _session = null;
+                _counted = null;
+                _notes = null;
+            }
+            else
+            {
+                _error = result.Error;
+            }
+
+            _confirmClose = false;
+            await LoadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void DismissReport()
+    {
+        _closed = null;
+        _info = null;
+    }
+
+    private static string DifferenceText(decimal difference) => difference switch
+    {
+        0 => "Cuadra (0,00 €)",
+        > 0 => $"Sobran {difference:C}",
+        _ => $"Faltan {-difference:C}",
+    };
+
+    public void Dispose() => _subscription?.Dispose();
+
+    private sealed class RefundForm
+    {
+        public PaymentRow Row { get; set; } = null!;
+        public decimal Amount { get; set; }
+        public string? Reason { get; set; }
+        public Guid RequestId { get; } = Guid.NewGuid();
+    }
+}

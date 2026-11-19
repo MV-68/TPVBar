@@ -1,0 +1,31 @@
+﻿@page "/Error"
+@attribute [AllowAnonymous]
+@using System.Diagnostics
+@using Microsoft.AspNetCore.Authorization
+
+<PageTitle>Error · TPVBar</PageTitle>
+
+<main class="phase-status">
+    <h1>Se ha producido un error</h1>
+    <p>No se ha podido completar la operación. Vuelva a intentarlo y, si el problema continúa, avise al encargado.</p>
+
+    @if (ShowRequestId)
+    {
+        <p>
+            <strong>Identificador de la petición:</strong> <code>@RequestId</code>
+        </p>
+    }
+
+    <p><a href="/">Volver al inicio</a></p>
+</main>
+
+@code {
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private string? RequestId { get; set; }
+    private bool ShowRequestId => !string.IsNullOrEmpty(RequestId);
+
+    protected override void OnInitialized() =>
+        RequestId = Activity.Current?.Id ?? HttpContext?.TraceIdentifier;
+}

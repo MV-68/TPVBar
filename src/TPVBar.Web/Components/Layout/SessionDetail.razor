@@ -1,0 +1,45 @@
+@using TPVBar.Application.Features.Cash
+@using TPVBar.Domain.Cash
+
+<p class="muted">
+    Abierta @BusinessTime.ToLocal(Session.OpenedAt).ToString("dd/MM/yyyy HH:mm") por @Session.OpenedBy · fondo inicial @Session.OpeningAmount.ToString("C")
+    @if (Session.ClosedAt is { } closedAt) { <text> · cerrada @BusinessTime.ToLocal(closedAt).ToString("dd/MM/yyyy HH:mm") por @Session.ClosedBy</text> }
+</p>
+
+<table class="grid">
+    <caption class="sr-only">Cobros por método de pago</caption>
+    <thead><tr><th>Método</th><th class="num">Cobros</th><th class="num">Devoluciones</th><th class="num">Neto</th></tr></thead>
+    <tbody>
+        @foreach (var m in Session.Methods)
+        {
+            <tr><td>@m.Name @if (m.IsCash) { <small>(cajón)</small> }</td><td class="num">@m.Payments.ToString("C")</td><td class="num">@m.Refunds.ToString("C")</td><td class="num">@m.Net.ToString("C")</td></tr>
+        }
+        @if (Session.Methods.Count == 0)
+        {
+            <tr><td colspan="4" class="muted">Sin cobros todavía.</td></tr>
+        }
+    </tbody>
+    <tfoot>
+        <tr><th>Total</th><th class="num">@Session.TotalPayments.ToString("C")</th><th class="num">@Session.TotalRefunds.ToString("C")</th><th class="num">@Session.NetTotal.ToString("C")</th></tr>
+    </tfoot>
+</table>
+<p class="muted">
+    @Session.PaymentsCount cobro(s) en @Session.OrdersCount comanda(s).
+    @if (Session.Status == CashSessionStatus.Open) { <text>El efectivo esperado no se muestra hasta cerrar la caja.</text> }
+</p>
+
+@if (Session.Movements.Count > 0)
+{
+    <h3>Movimientos manuales</h3>
+    <ul class="plain">
+        @foreach (var mv in Session.Movements)
+        {
+            <li>@BusinessTime.ToLocal(mv.CreatedAt).ToString("HH:mm") · <strong>@(mv.Type == CashMovementType.CashIn ? "Entrada" : "Salida")</strong> @mv.Amount.ToString("C") — @mv.Concept <span class="muted">(@mv.By)</span></li>
+        }
+    </ul>
+}
+
+@code {
+    [Parameter, EditorRequired]
+    public CashSessionView Session { get; set; } = default!;
+}

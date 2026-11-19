@@ -1,0 +1,33 @@
+<nav class="nav" aria-label="Navegación principal">
+    <AuthorizeView Policy="@Policies.TakeOrders">
+        <NavLink class="nav__link" href="mesas" Match="NavLinkMatch.Prefix">Mesas</NavLink>
+    </AuthorizeView>
+    <AuthorizeView Policy="@Policies.CashAccess">
+        <NavLink class="nav__link" href="caja" Match="NavLinkMatch.Prefix">Caja</NavLink>
+    </AuthorizeView>
+    <AuthorizeView Policy="@Policies.IssueInvoices">
+        <NavLink class="nav__link" href="facturas" Match="NavLinkMatch.Prefix">Facturas</NavLink>
+    </AuthorizeView>
+    <AuthorizeView Policy="@Policies.AdjustStock">
+        <NavLink class="nav__link" href="almacen" Match="NavLinkMatch.Prefix">Almacén</NavLink>
+    </AuthorizeView>
+    <AuthorizeView Policy="@Policies.ViewReports">
+        <NavLink class="nav__link" href="estadisticas" Match="NavLinkMatch.Prefix">Estadísticas</NavLink>
+    </AuthorizeView>
+    <AuthorizeView Policy="@Policies.UseKitchen">
+        <NavLink class="nav__link" href="cocina" Match="NavLinkMatch.Prefix">Cocina</NavLink>
+    </AuthorizeView>
+    <AuthorizeView Policy="@Policies.ManagePrinting">
+        <NavLink class="nav__link" href="configuracion/impresoras" Match="NavLinkMatch.Prefix">Impresoras</NavLink>
+    </AuthorizeView>
+    <AuthorizeView Policy="@Policies.ManageConfiguration">
+        <NavLink class="nav__link" href="configuracion/facturacion" Match="NavLinkMatch.Prefix">Facturación</NavLink>
+        <NavLink class="nav__link" href="configuracion/diagnostico" Match="NavLinkMatch.Prefix">Diagnóstico</NavLink>
+    </AuthorizeView>
+    <AuthorizeView Policy="@Policies.ManageCatalog">
+        <NavLink class="nav__link" href="productos" Match="NavLinkMatch.Prefix">Productos</NavLink>
+        <NavLink class="nav__link" href="configuracion/zonas-mesas" Match="NavLinkMatch.Prefix">Zonas y mesas</NavLink>
+        <NavLink class="nav__link" href="configuracion/tipos-impositivos" Match="NavLinkMatch.Prefix">Tipos impositivos</NavLink>
+        <NavLink class="nav__link" href="configuracion/metodos-pago" Match="NavLinkMatch.Prefix">Métodos de pago</NavLink>
+    </AuthorizeView>
+</nav>

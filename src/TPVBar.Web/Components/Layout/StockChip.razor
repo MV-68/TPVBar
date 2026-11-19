@@ -1,0 +1,37 @@
+@implements IDisposable
+@inject UseCaseRunner Runner
+@inject OperationEventBus Bus
+
+@if (_count > 0)
+{
+    <a class="chip chip--warn" href="almacen" role="status" title="Productos con stock bajo, agotado o negativo">
+        <span aria-hidden="true">⚠</span> Stock bajo: @_count
+    </a>
+}
+
+@code {
+    private int _count;
+    private IDisposable? _subscription;
+    private Timer? _timer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+        _subscription = Bus.Subscribe(e => e.Name is OperationEventNames.StockChanged or OperationEventNames.StockAlertRaised
+            ? InvokeAsync(async () => { await LoadAsync(); StateHasChanged(); })
+            : Task.CompletedTask);
+        _timer = new Timer(_ => _ = InvokeAsync(async () => { await LoadAsync(); StateHasChanged(); }), null, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(60));
+    }
+
+    private async Task LoadAsync()
+    {
+        var result = await Runner.RunAsync<TPVBar.Application.Features.Inventory.StockService, int>((s, ct) => s.GetAttentionCountAsync(ct));
+        _count = result.Ok ? result.Value : 0; // sin permiso de stock: no se muestra
+    }
+
+    public void Dispose()
+    {
+        _timer?.Dispose();
+        _subscription?.Dispose();
+    }
+}

@@ -1,0 +1,176 @@
+@page "/configuracion/diagnostico"
+@attribute [Authorize(Policy = Policies.ManageConfiguration)]
+@using Microsoft.AspNetCore.Authorization
+@using TPVBar.Web.Diagnostics
+@inject IServiceScopeFactory ScopeFactory
+
+<PageTitle>Diagnóstico · TPVBar</PageTitle>
+
+<main class="page page--wide">
+    <h1>Diagnóstico</h1>
+    <p class="muted">
+        Estado del sistema para el administrador. Solo muestra estados y recuentos: nunca claves, cadenas de conexión ni datos de clientes.
+    </p>
+
+    <p>
+        <button type="button" class="btn" @onclick="LoadAsync" disabled="@_loading">Actualizar</button>
+    </p>
+
+    @if (_error is not null) { <p class="alert alert--error" role="alert">@_error</p> }
+
+    @if (_snapshot is { } s)
+    {
+        @if (s.Warnings.Count == 0)
+        {
+            <p class="alert alert--ok" role="status">Sin avisos.</p>
+        }
+        else
+        {
+            <div class="alert" role="alert">
+                <strong>@s.Warnings.Count aviso(s):</strong>
+                <ul>
+                    @foreach (var warning in s.Warnings) { <li>@warning</li> }
+                </ul>
+            </div>
+        }
+
+        <div class="split">
+            <section aria-labelledby="d-app">
+                <h2 id="d-app">Aplicación</h2>
+                <table class="table">
+                    <tbody>
+                        <tr><th scope="row">Versión</th><td>@s.AppVersion</td></tr>
+                        <tr><th scope="row">Entorno</th><td>@s.Environment</td></tr>
+                        <tr><th scope="row">Runtime</th><td>@s.Runtime</td></tr>
+                        <tr><th scope="row">Pantallas abiertas (Blazor/SignalR)</th><td>@s.OpenScreens</td></tr>
+                        <tr><th scope="row">Clientes del hub de avisos</th><td>@s.RealtimeConnections</td></tr>
+                        <tr><th scope="row">Consultado</th><td>@s.GeneratedAt.ToLocalTime().ToString("g")</td></tr>
+                    </tbody>
+                </table>
+            </section>
+
+            <section aria-labelledby="d-db">
+                <h2 id="d-db">PostgreSQL</h2>
+                <table class="table">
+                    <tbody>
+                        <tr>
+                            <th scope="row">Estado</th>
+                            <td>@(s.Database.Reachable ? "Conectado" : "SIN CONEXIÓN")</td>
+                        </tr>
+                        @if (s.Database.Reachable)
+                        {
+                            <tr><th scope="row">Versión del servidor</th><td>@s.Database.ServerVersion</td></tr>
+                            <tr><th scope="row">Latencia</th><td>@s.Database.LatencyMs ms</td></tr>
+                            <tr><th scope="row">Última migración</th><td>@s.Database.LastMigration</td></tr>
+                            <tr>
+                                <th scope="row">Migraciones pendientes</th>
+                                <td>@(s.Database.PendingMigrations == 0 ? "Ninguna (esquema al día)" : s.Database.PendingMigrations + " — REVISAR")</td>
+                            </tr>
+                        }
+                        else if (s.Database.Error is not null)
+                        {
+                            <tr><th scope="row">Detalle</th><td>@s.Database.Error</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </section>
+        </div>
+
+        <div class="split">
+            <section aria-labelledby="d-print">
+                <h2 id="d-print">Impresión</h2>
+                @if (s.Print is null)
+                {
+                    <p class="alert">Sin datos (no hay conexión con la base de datos).</p>
+                }
+                else
+                {
+                    var p = s.Print;
+                    <table class="table">
+                        <tbody>
+                            <tr>
+                                <th scope="row">Agente de impresión</th>
+                                <td>
+                                    @(p.AgentOnline ? "En línea" : "SIN CONEXIÓN")
+                                    @if (p.AgentLastSeenAt is { } seen) { <text> · último contacto @DiagnosticsService.FormatAge(seen, s.GeneratedAt)</text> }
+                                    else { <text> · nunca se ha conectado</text> }
+                                </td>
+                            </tr>
+                            <tr><th scope="row">Versión del agente</th><td>@(p.AgentVersion ?? "—")</td></tr>
+                            <tr><th scope="row">Trabajos en cola</th><td>@p.PendingJobs</td></tr>
+                            <tr><th scope="row">Trabajos fallidos</th><td>@p.FailedJobs</td></tr>
+                            <tr>
+                                <th scope="row">Último error de impresión</th>
+                                <td>
+                                    @if (p.LastFailureAt is { } at)
+                                    {
+                                        <text>@at.ToLocalTime().ToString("g"): @p.LastFailureError</text>
+                                    }
+                                    else { <text>Ninguno registrado</text> }
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <p class="muted">«En línea» solo indica que el agente contacta con el servidor; no garantiza que el papel salga de la impresora.</p>
+                }
+            </section>
+
+            <section aria-labelledby="d-backup">
+                <h2 id="d-backup">Copia de seguridad</h2>
+                @switch (s.Backup.Kind)
+                {
+                    case BackupStatusKind.Available:
+                        var b = s.Backup.Status!;
+                        <table class="table">
+                            <tbody>
+                                <tr><th scope="row">Última copia</th><td>@b.FinishedAt.ToLocalTime().ToString("g") (@DiagnosticsService.FormatAge(b.FinishedAt, s.GeneratedAt))</td></tr>
+                                <tr><th scope="row">Resultado</th><td>@(b.Success ? "Correcta" : "FALLÓ")@(string.IsNullOrWhiteSpace(b.Message) ? "" : " — " + b.Message)</td></tr>
+                                <tr><th scope="row">Archivo</th><td>@(b.FileName ?? "—") (@(b.SizeBytes / 1024) KiB)</td></tr>
+                                <tr><th scope="row">Integridad verificada</th><td>@(b.Verified ? "Sí" : "No")</td></tr>
+                                <tr><th scope="row">Copiada a otra ubicación</th><td>@(b.CopiedToSecondaryLocation ? "Sí" : "NO — solo en el disco del servidor")</td></tr>
+                            </tbody>
+                        </table>
+                        break;
+                    case BackupStatusKind.NotConfigured:
+                        <p class="alert">No está configurada la ruta del estado de copias (<code>Backup:StatusFile</code>).</p>
+                        break;
+                    case BackupStatusKind.NeverRun:
+                        <p class="alert">Todavía no consta ninguna copia de seguridad.</p>
+                        break;
+                    default:
+                        <p class="alert">No se puede leer el estado de la última copia.</p>
+                        break;
+                }
+                <p class="muted">Las copias las genera <code>scripts\backup.ps1</code> (tarea programada); esta pantalla solo muestra su resultado.</p>
+            </section>
+        </div>
+    }
+</main>
+
+@code {
+    private DiagnosticsSnapshot? _snapshot;
+    private string? _error;
+    private bool _loading;
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _error = null;
+        try
+        {
+            // Un ámbito propio por consulta: el DbContext no debe vivir tanto como el circuito de Blazor.
+            await using var scope = ScopeFactory.CreateAsyncScope();
+            _snapshot = await scope.ServiceProvider.GetRequiredService<DiagnosticsService>().GetAsync(CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or Npgsql.NpgsqlException)
+        {
+            _error = "No se pudo leer el diagnóstico.";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+}

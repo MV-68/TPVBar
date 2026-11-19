@@ -1,0 +1,262 @@
+@page "/almacen"
+@attribute [Authorize(Policy = Policies.AdjustStock)]
+@implements IDisposable
+@using Microsoft.AspNetCore.Authorization
+@using TPVBar.Application.Features.Inventory
+@using TPVBar.Domain.Inventory
+@inject UseCaseRunner Runner
+@inject OperationEventBus Bus
+@inject AuthenticationStateProvider Authentication
+
+<PageTitle>Almacén · TPVBar</PageTitle>
+
+<main class="page page--wide">
+    <h1>Almacén</h1>
+    <p class="muted">
+        Control básico por unidades. Política: el stock se <strong>descuenta al enviar</strong> el pedido a cocina o barra y se
+        <strong>repone si esa línea se anula</strong>. Para controlar un producto, actívelo en su ficha (<a href="/productos">Productos</a>).
+    </p>
+
+    @if (_error is not null) { <p class="alert alert--error" role="alert">@_error</p> }
+    @if (_info is not null) { <p class="alert alert--ok" role="status">@_info</p> }
+
+    @if (_overview is not null)
+    {
+        @if (_overview.AttentionCount > 0)
+        {
+            <p class="alert" role="status">
+                <strong>@_overview.AttentionCount producto(s) necesitan reposición:</strong>
+                @string.Join(", ", _overview.Rows.Where(r => r.ProductActive && r.NeedsAttention).Select(r => r.Name)).
+            </p>
+        }
+
+        <div class="split">
+            <section aria-labelledby="existencias">
+                <h2 id="existencias">Existencias</h2>
+                @if (_overview.Rows.Count == 0)
+                {
+                    <p class="alert">Ningún producto lleva control de stock todavía.</p>
+                }
+                else
+                {
+                    <table class="grid">
+                        <thead><tr><th>Producto</th><th>Categoría</th><th class="num">Stock</th><th class="num">Mínimo</th><th>Estado</th><th><span class="sr-only">Acciones</span></th></tr></thead>
+                        <tbody>
+                            @foreach (var r in _overview.Rows)
+                            {
+                                <tr class="@(r.ProductActive ? "" : "row--inactive")">
+                                    <td>@r.Name @if (!r.ProductActive) { <small>(inactivo)</small> }</td>
+                                    <td>@r.CategoryName</td>
+                                    <td class="num">@r.Quantity.ToString("0.###") @r.Unit</td>
+                                    <td class="num">@r.Minimum.ToString("0.###")</td>
+                                    <td><span class="badge badge--stock-@r.Status.ToString().ToLowerInvariant()">@StatusText(r.Status)</span></td>
+                                    <td class="actions">
+                                        <button type="button" class="btn btn--small" disabled="@_busy" @onclick="() => Open(r, StockMovementReason.Entry)">Entrada</button>
+                                        <button type="button" class="btn btn--small" disabled="@_busy" @onclick="() => Open(r, StockMovementReason.Exit)">Salida</button>
+                                        <button type="button" class="btn btn--small" disabled="@_busy" @onclick="() => Open(r, StockMovementReason.Adjustment)">Ajustar</button>
+                                        <button type="button" class="btn btn--small" disabled="@_busy" @onclick="() => ShowHistoryAsync(r)">Historial</button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+
+                @if (_history is not null)
+                {
+                    <h2>Historial · @_historyName</h2>
+                    <table class="grid">
+                        <thead><tr><th>Fecha</th><th>Motivo</th><th class="num">Movimiento</th><th class="num">Saldo</th><th>Detalle</th><th>Usuario</th></tr></thead>
+                        <tbody>
+                            @foreach (var m in _history)
+                            {
+                                <tr>
+                                    <td>@BusinessTime.ToLocal(m.At).ToString("dd/MM HH:mm")</td>
+                                    <td>@ReasonText(m.Reason)</td>
+                                    <td class="num">@(m.Delta > 0 ? "+" : "")@m.Delta.ToString("0.###")</td>
+                                    <td class="num">@m.After.ToString("0.###")</td>
+                                    <td>@m.Notes @if (m.Reference is not null) { <small>(@m.Reference)</small> }</td>
+                                    <td>@m.By</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </section>
+
+            <div>
+                @if (_form is not null)
+                {
+                    <section class="panel" aria-labelledby="movimiento">
+                        <h2 id="movimiento">@FormTitle · @_form.Row.Name</h2>
+                        <p class="muted">Existencias actuales: @_form.Row.Quantity.ToString("0.###") @_form.Row.Unit</p>
+                        <form @onsubmit="SaveAsync">
+                            <label>@(_form.Reason == StockMovementReason.Adjustment ? "Cantidad contada" : "Cantidad") (@_form.Row.Unit)
+                                <input type="number" step="0.001" min="@(_form.Reason == StockMovementReason.Adjustment ? "0" : "0.001")" required @bind="_form.Quantity" />
+                            </label>
+                            <label>@(_form.Reason == StockMovementReason.Entry ? "Notas (opcional)" : "Motivo (obligatorio)")
+                                <input type="text" maxlength="500" required="@(_form.Reason != StockMovementReason.Entry)" @bind="_form.Notes" />
+                            </label>
+                            <div class="form-actions">
+                                <button type="submit" class="btn btn--primary" disabled="@_busy">Registrar</button>
+                                <button type="button" class="btn" @onclick="() => _form = null">Cancelar</button>
+                            </div>
+                        </form>
+                    </section>
+                }
+
+                @if (_canConfigure)
+                {
+                    <section class="panel" aria-labelledby="negativo">
+                        <h2 id="negativo">Stock negativo</h2>
+                        <p class="muted">Por defecto, si no hay existencias suficientes el envío se rechaza. Solo el administrador puede permitir que el stock baje de cero (el cambio queda auditado).</p>
+                        <label class="check">
+                            <input type="checkbox" checked="@_overview.AllowNegative" @onchange="e => ToggleNegativeAsync((bool)(e.Value ?? false))" />
+                            Permitir stock negativo
+                        </label>
+                    </section>
+                }
+            </div>
+        </div>
+    }
+</main>
+
+@code {
+    private StockOverview? _overview;
+    private IReadOnlyList<StockMovementRow>? _history;
+    private string? _historyName;
+    private MovementForm? _form;
+    private string? _error;
+    private string? _info;
+    private bool _busy;
+    private bool _canConfigure;
+    private IDisposable? _subscription;
+    private int _reloadPending;
+
+    private string FormTitle => _form?.Reason switch
+    {
+        StockMovementReason.Entry => "Entrada de stock",
+        StockMovementReason.Exit => "Salida de stock",
+        _ => "Ajuste a recuento",
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = (await Authentication.GetAuthenticationStateAsync()).User;
+        _canConfigure = user.HasClaim(TpvClaimTypes.Permission, nameof(TPVBar.Domain.Security.Permission.ManageConfiguration));
+        await LoadAsync();
+        _subscription = Bus.Subscribe(e => e.Name is OperationEventNames.StockChanged ? ScheduleReloadAsync() : Task.CompletedTask);
+    }
+
+    private async Task ScheduleReloadAsync()
+    {
+        if (Interlocked.Exchange(ref _reloadPending, 1) == 1)
+        {
+            return;
+        }
+
+        await Task.Delay(200);
+        Interlocked.Exchange(ref _reloadPending, 0);
+        await InvokeAsync(async () =>
+        {
+            if (!_busy)
+            {
+                await LoadAsync();
+                StateHasChanged();
+            }
+        });
+    }
+
+    private async Task LoadAsync()
+    {
+        var result = await Runner.RunAsync<StockService, StockOverview>((s, ct) => s.GetOverviewAsync(ct));
+        _overview = result.Value;
+        _error = result.Error ?? _error;
+    }
+
+    private void Open(StockRow row, StockMovementReason reason) =>
+        _form = new MovementForm { Row = row, Reason = reason, Quantity = reason == StockMovementReason.Adjustment ? row.Quantity : 0 };
+
+    private async Task ShowHistoryAsync(StockRow row)
+    {
+        var result = await Runner.RunAsync<StockService, IReadOnlyList<StockMovementRow>>((s, ct) => s.ListMovementsAsync(row.ProductId, 100, ct));
+        _error = result.Error;
+        _history = result.Value;
+        _historyName = row.Name;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_form is not { } form || _busy)
+        {
+            return;
+        }
+
+        _busy = true;
+        _info = null;
+        _error = null;
+        try
+        {
+            var (id, quantity, notes, key) = (form.Row.ProductId, form.Quantity, form.Notes ?? string.Empty, form.RequestId);
+            var result = form.Reason switch
+            {
+                StockMovementReason.Entry => await Runner.RunAsync<StockService>((s, ct) => s.RegisterEntryAsync(id, quantity, notes, key, ct)),
+                StockMovementReason.Exit => await Runner.RunAsync<StockService>((s, ct) => s.RegisterExitAsync(id, quantity, notes, key, ct)),
+                _ => await Runner.RunAsync<StockService>((s, ct) => s.AdjustToCountAsync(id, quantity, notes, key, ct)),
+            };
+
+            _error = result.Error;
+            if (result.Ok)
+            {
+                _info = "Movimiento registrado.";
+                var row = form.Row;
+                _form = null;
+                await LoadAsync();
+                if (_history is not null && _historyName == row.Name)
+                {
+                    await ShowHistoryAsync(row);
+                }
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ToggleNegativeAsync(bool allow)
+    {
+        var result = await Runner.RunAsync<StockService>((s, ct) => s.SetAllowNegativeAsync(allow, ct));
+        _error = result.Error;
+        _info = result.Ok ? (allow ? "Se permite stock negativo." : "Ya no se permite stock negativo.") : null;
+        await LoadAsync();
+    }
+
+    private static string StatusText(StockStatus status) => status switch
+    {
+        StockStatus.Ok => "Correcto",
+        StockStatus.Low => "Stock bajo",
+        StockStatus.OutOfStock => "Agotado",
+        _ => "Negativo",
+    };
+
+    private static string ReasonText(StockMovementReason reason) => reason switch
+    {
+        StockMovementReason.Sale => "Venta",
+        StockMovementReason.VoidReturn => "Devolución por anulación",
+        StockMovementReason.Entry => "Entrada",
+        StockMovementReason.Exit => "Salida",
+        _ => "Ajuste",
+    };
+
+    public void Dispose() => _subscription?.Dispose();
+
+    private sealed class MovementForm
+    {
+        public StockRow Row { get; set; } = null!;
+        public StockMovementReason Reason { get; set; }
+        public decimal Quantity { get; set; }
+        public string? Notes { get; set; }
+        public Guid RequestId { get; } = Guid.NewGuid();
+    }
+}

@@ -1,0 +1,137 @@
+@page "/configuracion/metodos-pago"
+@attribute [Authorize(Policy = Policies.ManageCatalog)]
+@using Microsoft.AspNetCore.Authorization
+@using TPVBar.Application.Features.Cash
+@inject UseCaseRunner Runner
+
+<PageTitle>Métodos de pago · TPVBar</PageTitle>
+
+<main class="page page--wide">
+    <h1>Métodos de pago</h1>
+    <p class="alert">
+        Registrar un cobro con «Tarjeta» solo anota que el cliente pagó así: TPVBar <strong>no</strong> se comunica con el datáfono.
+        Los métodos marcados «usa el cajón» cuentan para el efectivo esperado en el cierre de caja.
+    </p>
+
+    @if (_error is not null) { <p class="alert alert--error" role="alert">@_error</p> }
+    @if (_info is not null) { <p class="alert alert--ok" role="status">@_info</p> }
+
+    <div class="split">
+        <section aria-labelledby="lista">
+            <h2 id="lista">Configurados</h2>
+            <button type="button" class="btn btn--primary" @onclick="NewMethod">Nuevo método</button>
+            @if (_methods is not null)
+            {
+                <table class="grid">
+                    <thead><tr><th>Nombre</th><th>Código</th><th>Cajón</th><th>Referencia</th><th>Estado</th><th><span class="sr-only">Acciones</span></th></tr></thead>
+                    <tbody>
+                        @foreach (var m in _methods)
+                        {
+                            <tr class="@(m.IsActive ? "" : "row--inactive")">
+                                <td>@m.Name</td><td><code>@m.Code</code></td>
+                                <td>@(m.IsCash ? "Sí" : "No")</td><td>@(m.RequiresReference ? "Obligatoria" : "Opcional")</td>
+                                <td>@(m.IsActive ? "Activo" : "Inactivo")</td>
+                                <td class="actions">
+                                    <button type="button" class="btn btn--small" @onclick="() => Edit(m)">Editar</button>
+                                    <button type="button" class="btn btn--small" @onclick="() => ToggleAsync(m)">@(m.IsActive ? "Desactivar" : "Activar")</button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </section>
+
+        @if (_form is not null)
+        {
+            <section class="panel" aria-labelledby="form">
+                <h2 id="form">@(_form.Id is null ? "Nuevo método de pago" : "Editar método de pago")</h2>
+                <form @onsubmit="SaveAsync">
+                    @if (_form.Id is null)
+                    {
+                        <label>Código (no se podrá cambiar) <input type="text" maxlength="30" required @bind="_form.Code" placeholder="BIZUM" /></label>
+                    }
+                    <label>Nombre <input type="text" maxlength="60" required @bind="_form.Name" /></label>
+                    <label>Orden <input type="number" @bind="_form.DisplayOrder" /></label>
+                    <label class="check"><input type="checkbox" @bind="_form.AffectsCashDrawer" /> Usa el cajón (efectivo)</label>
+                    <label class="check"><input type="checkbox" @bind="_form.RequiresReference" /> Exige referencia</label>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn--primary" disabled="@_busy">Guardar</button>
+                        <button type="button" class="btn" @onclick="() => _form = null">Cancelar</button>
+                    </div>
+                </form>
+            </section>
+        }
+    </div>
+</main>
+
+@code {
+    private IReadOnlyList<PaymentMethodView>? _methods;
+    private MethodForm? _form;
+    private string? _error;
+    private string? _info;
+    private bool _busy;
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var result = await Runner.RunAsync<PaymentMethodAdminService, IReadOnlyList<PaymentMethodView>>((s, ct) => s.ListAsync(ct));
+        _methods = result.Value;
+        _error = result.Error;
+    }
+
+    private void NewMethod() => _form = new MethodForm { DisplayOrder = (_methods?.Count ?? 0) + 1 };
+
+    private void Edit(PaymentMethodView m) => _form = new MethodForm
+    {
+        Id = m.Id, Code = m.Code, Name = m.Name, DisplayOrder = m.DisplayOrder, AffectsCashDrawer = m.IsCash, RequiresReference = m.RequiresReference,
+    };
+
+    private async Task SaveAsync()
+    {
+        if (_form is not { } form || _busy)
+        {
+            return;
+        }
+
+        _busy = true;
+        _info = null;
+        try
+        {
+            var name = form.Name ?? string.Empty;
+            var result = form.Id is { } id
+                ? await Runner.RunAsync<PaymentMethodAdminService>((s, ct) => s.UpdateAsync(id, name, form.RequiresReference, form.AffectsCashDrawer, form.DisplayOrder, ct))
+                : await Runner.RunAsync<PaymentMethodAdminService>((s, ct) => s.CreateAsync(form.Code ?? string.Empty, name, form.RequiresReference, form.AffectsCashDrawer, form.DisplayOrder, ct));
+            _error = result.Error;
+            if (result.Ok)
+            {
+                _info = "Método de pago guardado.";
+                _form = null;
+            }
+
+            await LoadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ToggleAsync(PaymentMethodView m)
+    {
+        var result = await Runner.RunAsync<PaymentMethodAdminService>((s, ct) => s.SetActiveAsync(m.Id, !m.IsActive, ct));
+        _error = result.Error;
+        await LoadAsync();
+    }
+
+    private sealed class MethodForm
+    {
+        public int? Id { get; set; }
+        public string? Code { get; set; }
+        public string? Name { get; set; }
+        public int DisplayOrder { get; set; }
+        public bool AffectsCashDrawer { get; set; }
+        public bool RequiresReference { get; set; }
+    }
+}

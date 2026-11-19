@@ -1,0 +1,129 @@
+@page "/facturas"
+@attribute [Authorize(Policy = Policies.IssueInvoices)]
+@using Microsoft.AspNetCore.Authorization
+@using TPVBar.Application.Features.Invoicing
+@using TPVBar.Domain.Invoicing
+@inject UseCaseRunner Runner
+
+<PageTitle>Facturas · TPVBar</PageTitle>
+
+<main class="page page--wide">
+    <h1>Facturas</h1>
+    <p class="alert" role="note">
+        Las facturas se numeran y se encadenan con su registro de facturación. El envío a la AEAT (VERI*FACTU) está implementado pero
+        <strong>no se ha probado contra la AEAT</strong> y se activa solo en la configuración del servidor: mientras esté desactivado, todos los registros quedan
+        «Pendiente de envío». Hasta validarlo con el asesor fiscal, no use TPVBar como único sistema de facturación.
+    </p>
+
+    <form class="period" @onsubmit="LoadAsync" aria-label="Filtro de facturas">
+        <label>Desde <input type="date" @bind="_from" /></label>
+        <label>Hasta <input type="date" @bind="_to" /></label>
+        <label>Tipo
+            <select @bind="_kind">
+                <option value="">Todas</option>
+                <option value="@InvoiceKind.Simplified">Simplificadas</option>
+                <option value="@InvoiceKind.Complete">Completas</option>
+                <option value="@InvoiceKind.Rectificative">Rectificativas</option>
+            </select>
+        </label>
+        <label>Buscar <input type="search" maxlength="60" placeholder="Número, cliente o NIF" @bind="_text" /></label>
+        <button type="submit" class="btn btn--primary" disabled="@_busy">Buscar</button>
+    </form>
+
+    @if (_error is not null) { <p class="alert alert--error" role="alert">@_error</p> }
+
+    @if (_items is null)
+    {
+        @if (_error is null) { <p>Cargando…</p> }
+    }
+    else if (_items.Count == 0)
+    {
+        <p class="muted">No hay facturas con ese filtro. Se emiten desde la pantalla de cobro, cuando la comanda está cobrada.</p>
+    }
+    else
+    {
+        <table class="grid">
+            <caption class="sr-only">Facturas emitidas</caption>
+            <thead>
+                <tr><th scope="col">Número</th><th scope="col">Fecha</th><th scope="col">Tipo</th><th scope="col">Cliente</th><th scope="col" class="num">Total</th><th scope="col">Estado</th></tr>
+            </thead>
+            <tbody>
+                @foreach (var i in _items)
+                {
+                    <tr>
+                        <td><a href="@($"/facturas/{i.Id}")">@i.FullNumber</a></td>
+                        <td>@i.IssueDate.ToString("dd/MM/yyyy")</td>
+                        <td>@KindText(i)</td>
+                        <td>@(i.RecipientName ?? "—")</td>
+                        <td class="num">@i.Total.ToString("C")</td>
+                        <td>
+                            @if (i.Cancelled) { <span class="badge badge--bill">Anulada</span> }
+                            else { <span class="badge @(i.Submission == SubmissionStatus.Rejected ? "badge--bill" : "")">@SubmissionText(i.Submission)</span> }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+
+    <AuthorizeView Policy="@Policies.ViewReports">
+        <section aria-labelledby="exportar">
+            <h2 id="exportar">Informes para el asesor (CSV para Excel)</h2>
+            <p class="muted">Se calculan sobre las facturas emitidas del periodo elegido arriba (fechas inclusive). Las rectificativas restan; las anuladas aparecen a cero en el libro y no cuentan en el IVA.</p>
+            <p class="quick">
+                <a class="btn btn--small" href="@ExportUrl("facturas-libro")" download>Libro de facturas emitidas</a>
+                <a class="btn btn--small" href="@ExportUrl("facturas-iva")" download>Resumen de IVA por tipo</a>
+            </p>
+        </section>
+    </AuthorizeView>
+</main>
+
+@code {
+    private DateOnly _from = new(BusinessTime.Today(TimeProvider.System).Year, BusinessTime.Today(TimeProvider.System).Month, 1);
+    private DateOnly _to = BusinessTime.Today(TimeProvider.System);
+    private string _kind = string.Empty;
+    private string _text = string.Empty;
+    private IReadOnlyList<InvoiceSummary>? _items;
+    private string? _error;
+    private bool _busy;
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _busy = true;
+        try
+        {
+            InvoiceKind? kind = Enum.TryParse<InvoiceKind>(_kind, out var parsed) ? parsed : null;
+            var filter = new InvoiceFilter(_from, _to, _text, kind);
+            var result = await Runner.RunAsync<InvoiceService, IReadOnlyList<InvoiceSummary>>((s, ct) => s.ListAsync(filter, ct));
+            _error = result.Error;
+            if (result.Ok)
+            {
+                _items = result.Value;
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private string ExportUrl(string kind) =>
+        $"/export/{kind}.csv?desde={_from:yyyy-MM-dd}&hasta={_to:yyyy-MM-dd}";
+
+    private static string SubmissionText(SubmissionStatus s) => s switch
+    {
+        SubmissionStatus.Accepted => "Aceptada por la AEAT",
+        SubmissionStatus.AcceptedWithErrors => "Aceptada con errores",
+        SubmissionStatus.Rejected => "Rechazada por la AEAT",
+        _ => "Pendiente de envío a la AEAT",
+    };
+
+    private static string KindText(InvoiceSummary i) => i.Kind switch
+    {
+        InvoiceKind.Simplified => $"Simplificada ({i.TypeCode})",
+        InvoiceKind.Complete => $"Completa ({i.TypeCode})",
+        _ => $"Rectificativa ({i.TypeCode})",
+    };
+}

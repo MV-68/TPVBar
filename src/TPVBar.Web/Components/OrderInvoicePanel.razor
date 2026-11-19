@@ -1,0 +1,109 @@
+@using TPVBar.Application.Features.Invoicing
+@using TPVBar.Domain.Invoicing
+@inject UseCaseRunner Runner
+
+<section class="panel" aria-labelledby="facturar">
+    <h3 id="facturar">Factura</h3>
+
+    @if (_error is not null) { <p class="alert alert--error" role="alert">@_error</p> }
+    @if (_info is not null) { <p class="alert alert--ok" role="status">@_info</p> }
+
+    @if (_invoices is { Count: > 0 })
+    {
+        <ul class="plain">
+            @foreach (var i in _invoices)
+            {
+                <li>
+                    <a href="@($"/facturas/{i.Id}")">@i.FullNumber</a> · @i.Total.ToString("C")
+                    @if (i.Cancelled) { <span class="badge badge--bill">Anulada</span> }
+                </li>
+            }
+        </ul>
+    }
+
+    @if (_settings is { IssuerComplete: false })
+    {
+        <p class="alert" role="alert">Faltan los datos del emisor (nombre, NIF, domicilio). Un administrador debe completarlos en «Facturación».</p>
+    }
+    else
+    {
+        <p class="muted">El justificante de pago no es una factura. Emita aquí la factura simplificada (hasta @(_settings?.SimplifiedLimit.ToString("C"))) o la completa con los datos del cliente.</p>
+        <div class="form-actions">
+            <button type="button" class="btn" disabled="@_busy" @onclick="() => IssueAsync(InvoiceKind.Simplified)">Emitir factura simplificada</button>
+            <button type="button" class="btn" disabled="@_busy" @onclick="() => _showComplete = !_showComplete">Factura completa…</button>
+        </div>
+
+        @if (_showComplete)
+        {
+            <form @onsubmit="() => IssueAsync(InvoiceKind.Complete)">
+                <label>Nombre o razón social <input type="text" maxlength="120" required @bind="_name" /></label>
+                <label>NIF/NIE/CIF <input type="text" maxlength="12" required @bind="_nif" /></label>
+                <label>Domicilio <input type="text" maxlength="250" required @bind="_address" /></label>
+                <button type="submit" class="btn btn--primary" disabled="@_busy">Emitir factura completa</button>
+            </form>
+        }
+    }
+</section>
+
+@code {
+    [Parameter, EditorRequired]
+    public long OrderId { get; set; }
+
+    private IReadOnlyList<InvoiceSummary>? _invoices;
+    private InvoiceSettings? _settings;
+    private string? _error;
+    private string? _info;
+    private bool _busy;
+    private bool _showComplete;
+    private string _name = string.Empty;
+    private string _nif = string.Empty;
+    private string _address = string.Empty;
+    private Guid? _key;
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var list = await Runner.RunAsync<InvoiceService, IReadOnlyList<InvoiceSummary>>((s, ct) => s.ListForOrderAsync(OrderId, ct));
+        var settings = await Runner.RunAsync<InvoiceService, InvoiceSettings>((s, ct) => s.GetSettingsAsync(ct));
+        _error = list.Error ?? settings.Error;
+        _invoices = list.Ok ? list.Value : null;
+        _settings = settings.Ok ? settings.Value : null;
+    }
+
+    private async Task IssueAsync(InvoiceKind kind)
+    {
+        if (_busy)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        _info = null;
+        try
+        {
+            // La misma clave se conserva hasta que la factura se emite: un reintento nunca la duplica.
+            var key = _key ??= Guid.NewGuid();
+            var recipient = kind == InvoiceKind.Complete ? new InvoiceRecipient(_name, _nif, _address) : null;
+            var request = new IssueInvoiceRequest(OrderId, kind, recipient, key);
+            var result = await Runner.RunAsync<InvoiceService, IssueInvoiceResult>((s, ct) => s.IssueAsync(request, ct));
+            if (result.Ok)
+            {
+                _key = null;
+                _showComplete = false;
+                _info = result.Value!.AlreadyProcessed ? "La factura ya estaba emitida." : $"Factura {result.Value.FullNumber} emitida.";
+                await LoadAsync();
+            }
+            else
+            {
+                _error = result.Error;
+                _key = null;
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

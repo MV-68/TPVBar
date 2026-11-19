@@ -1,0 +1,445 @@
+@page "/comanda/{OrderId:long}"
+@attribute [Authorize(Policy = Policies.TakeOrders)]
+@implements IDisposable
+@using Microsoft.AspNetCore.Authorization
+@using TPVBar.Application.Common
+@using TPVBar.Application.Features.Orders
+@using TPVBar.Domain.Catalog
+@using TPVBar.Domain.Sales
+@inject UseCaseRunner Runner
+@inject NavigationManager Navigation
+@inject AuthenticationStateProvider Authentication
+@inject OperationEventBus Bus
+
+<PageTitle>Comanda · TPVBar</PageTitle>
+
+<main class="order">
+    @if (_order is null)
+    {
+        <div class="order__loading">
+            @if (_error is not null)
+            {
+                <p class="alert alert--error" role="alert">@_error</p>
+                <a class="btn btn--primary" href="/mesas">Volver a mesas</a>
+            }
+            else
+            {
+                <p>Cargando comanda…</p>
+            }
+        </div>
+    }
+    else
+    {
+        <section class="order__menu" aria-label="Carta">
+            <div class="order__head">
+                <a class="btn btn--light-border" href="/mesas">← Mesas</a>
+                <h1>@_order.TableLabel</h1>
+            </div>
+
+            <div class="categories" role="tablist" aria-label="Categorías">
+                @if (_menu is not null)
+                {
+                    @foreach (var category in _menu.Categories)
+                    {
+                        <button type="button" role="tab" class="category @(category.Id == _selectedCategoryId ? "category--active" : "")"
+                                aria-selected="@(category.Id == _selectedCategoryId)" @onclick="() => _selectedCategoryId = category.Id">
+                            @category.Name
+                        </button>
+                    }
+                }
+            </div>
+
+            <label class="notes-field">
+                Observaciones para el próximo producto
+                <input type="text" maxlength="200" @bind="_nextNotes" @bind:event="oninput" placeholder="Sin hielo, poco hecho…" />
+            </label>
+
+            <div class="products">
+                @if (CurrentCategory is { } selected)
+                {
+                    @foreach (var product in selected.Products)
+                    {
+                        <button type="button" class="product" disabled="@(_busy || !_order.IsEditable)" @onclick="() => AddAsync(product)">
+                            <span class="product__name">@product.Name</span>
+                            <span class="product__price">@product.Price.ToString("C")</span>
+                            <span class="product__station">@(product.Station == PreparationStation.Bar ? "Barra" : "Cocina")</span>
+                        </button>
+                    }
+                }
+                else
+                {
+                    <p>No hay productos disponibles en la carta.</p>
+                }
+            </div>
+        </section>
+
+        <aside class="order__summary" aria-label="Resumen de la comanda">
+            <h2>Comanda <small>@StatusText(_order.Status)</small></h2>
+
+            @if (_error is not null)
+            {
+                <p class="alert alert--error" role="alert">@_error</p>
+            }
+            @if (_info is not null)
+            {
+                <p class="alert alert--ok" role="status">@_info</p>
+            }
+
+            @if (_order.Lines.Count == 0)
+            {
+                <p class="muted">Todavía no hay productos. Toque uno de la carta.</p>
+            }
+
+            <ul class="lines">
+                @foreach (var line in _order.Lines)
+                {
+                    <li class="line line--@line.Status.ToString().ToLowerInvariant()">
+                        <div class="line__main">
+                            <span class="line__qty">@line.Quantity.ToString("0.###")×</span>
+                            <span class="line__name">@line.Name</span>
+                            <span class="line__total">@line.LineTotal.ToString("C")</span>
+                        </div>
+                        <div class="line__meta">
+                            <span class="badge badge--@line.Status.ToString().ToLowerInvariant()">@LineStatusText(line.Status)</span>
+                            @if (!string.IsNullOrEmpty(line.Notes))
+                            {
+                                <span class="line__notes">«@line.Notes»</span>
+                            }
+                            @if (line.Status == OrderLineStatus.Cancelled)
+                            {
+                                <span class="line__notes">Motivo: @line.VoidReason</span>
+                            }
+                        </div>
+
+                        @if (_order.IsEditable && line.Status == OrderLineStatus.Pending)
+                        {
+                            <div class="line__actions">
+                                <button type="button" class="btn btn--small" disabled="@_busy" aria-label="Quitar una unidad de @line.Name"
+                                        @onclick="() => ChangeQuantityAsync(line, line.Quantity - 1)">−</button>
+                                <button type="button" class="btn btn--small" disabled="@_busy" aria-label="Añadir una unidad de @line.Name"
+                                        @onclick="() => ChangeQuantityAsync(line, line.Quantity + 1)">+</button>
+                                @if (_confirmRemoveId == line.Id)
+                                {
+                                    <span>¿Quitar?</span>
+                                    <button type="button" class="btn btn--small btn--danger" disabled="@_busy" @onclick="() => RemoveAsync(line)">Sí, quitar</button>
+                                    <button type="button" class="btn btn--small" @onclick="() => _confirmRemoveId = null">No</button>
+                                }
+                                else
+                                {
+                                    <button type="button" class="btn btn--small" disabled="@_busy" @onclick="() => _confirmRemoveId = line.Id">Quitar</button>
+                                }
+                            </div>
+                        }
+                        else if (_order.IsEditable && line.Status != OrderLineStatus.Cancelled && _canVoid)
+                        {
+                            <div class="line__actions">
+                                @if (_voidLineId == line.Id)
+                                {
+                                    <input type="text" class="void-reason" maxlength="200" placeholder="Motivo de la anulación"
+                                           aria-label="Motivo de la anulación" @bind="_voidReason" @bind:event="oninput" />
+                                    <button type="button" class="btn btn--small btn--danger" disabled="@(_busy || string.IsNullOrWhiteSpace(_voidReason))"
+                                            @onclick="() => VoidAsync(line)">Confirmar anulación</button>
+                                    <button type="button" class="btn btn--small" @onclick="CancelVoid">Cancelar</button>
+                                }
+                                else
+                                {
+                                    <button type="button" class="btn btn--small" disabled="@_busy" @onclick="() => StartVoid(line)">Anular</button>
+                                }
+                            </div>
+                        }
+                    </li>
+                }
+            </ul>
+
+            <dl class="totals">
+                <div><dt>Base imponible</dt><dd>@_order.Subtotal.ToString("C")</dd></div>
+                <div><dt>IVA incluido</dt><dd>@_order.TaxTotal.ToString("C")</dd></div>
+                <div class="totals__grand"><dt>Total</dt><dd>@_order.GrandTotal.ToString("C")</dd></div>
+                @if (_order.PaidTotal > 0)
+                {
+                    <div><dt>Cobrado</dt><dd>@_order.PaidTotal.ToString("C")</dd></div>
+                    <div class="totals__balance"><dt>Pendiente</dt><dd>@_order.Balance.ToString("C")</dd></div>
+                }
+            </dl>
+
+            <div class="order__actions">
+                @if (_order.Status == OrderStatus.Open)
+                {
+                    <button type="button" class="btn btn--primary btn--big" disabled="@(_busy || !_order.HasPendingLines)" @onclick="SendAsync">
+                        Enviar a cocina / barra
+                    </button>
+                    <button type="button" class="btn btn--big" disabled="@(_busy || _order.HasPendingLines || _order.GrandTotal == 0)" @onclick="RequestBillAsync">
+                        Pedir la cuenta
+                    </button>
+                    @if (_canPay)
+                    {
+                        <a class="btn btn--primary btn--big btn--link @(_order.HasPendingLines || _order.GrandTotal == 0 ? "btn--disabled" : "")"
+                           href="@($"/cobro/{_order.Id}")" aria-disabled="@(_order.HasPendingLines || _order.GrandTotal == 0)">Cobrar</a>
+                    }
+                    @if (_order.Lines.All(l => l.Status is OrderLineStatus.Pending or OrderLineStatus.Cancelled))
+                    {
+                        @if (_confirmCancel)
+                        {
+                            <span>¿Cancelar la comanda y liberar la mesa?</span>
+                            <button type="button" class="btn btn--danger" disabled="@_busy" @onclick="CancelOrderAsync">Sí, cancelar</button>
+                            <button type="button" class="btn" @onclick="() => _confirmCancel = false">No</button>
+                        }
+                        else
+                        {
+                            <button type="button" class="btn" disabled="@_busy" @onclick="() => _confirmCancel = true">Cancelar comanda</button>
+                        }
+                    }
+                }
+                else if (_order.Status == OrderStatus.PendingPayment)
+                {
+                    <p class="alert">@(_order.PaidTotal > 0 ? "Cobro parcial en curso: termine de cobrar la cuenta." : "Cuenta pedida: pendiente de cobro.")</p>
+                    @if (_canPay)
+                    {
+                        <a class="btn btn--primary btn--big btn--link" href="@($"/cobro/{_order.Id}")">Cobrar</a>
+                    }
+                    @if (_canReopen && _order.PaidTotal == 0)
+                    {
+                        <button type="button" class="btn" disabled="@_busy" @onclick="ReopenAsync">Reabrir comanda</button>
+                    }
+                }
+                else if (_order.Status == OrderStatus.Paid)
+                {
+                    <p class="alert alert--ok">Comanda cobrada.</p>
+                    @if (_canPay)
+                    {
+                        <a class="btn btn--big btn--link" href="@($"/cobro/{_order.Id}")">Ver cobro y justificante</a>
+                    }
+                }
+            </div>
+        </aside>
+    }
+</main>
+
+@code {
+    [Parameter]
+    public long OrderId { get; set; }
+
+    private OrderView? _order;
+    private MenuView? _menu;
+    private int? _selectedCategoryId;
+    private string? _nextNotes;
+    private string? _error;
+    private string? _info;
+    private bool _busy;
+    private long? _confirmRemoveId;
+    private bool _confirmCancel;
+    private long? _voidLineId;
+    private string? _voidReason;
+    private Timer? _timer;
+    private IDisposable? _subscription;
+    private int _reloadPending;
+
+    private CategoryMenu? CurrentCategory =>
+        _menu?.Categories.FirstOrDefault(c => c.Id == _selectedCategoryId) ?? _menu?.Categories.FirstOrDefault();
+
+    // Solo se ofrecen las acciones permitidas; el servidor las vuelve a comprobar siempre.
+    private bool _canVoid;
+    private bool _canReopen;
+    private bool _canPay;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = (await Authentication.GetAuthenticationStateAsync()).User;
+        _canVoid = user.HasClaim(TpvClaimTypes.Permission, nameof(TPVBar.Domain.Security.Permission.VoidLines));
+        _canReopen = user.HasClaim(TpvClaimTypes.Permission, nameof(TPVBar.Domain.Security.Permission.ReopenTables));
+        _canPay = user.HasClaim(TpvClaimTypes.Permission, nameof(TPVBar.Domain.Security.Permission.TakePayments));
+
+        var menu = await Runner.RunAsync<MenuService, MenuView>((s, ct) => s.GetMenuAsync(ct));
+        _menu = menu.Value;
+        _selectedCategoryId = _menu?.Categories.FirstOrDefault()?.Id;
+        await ReloadAsync();
+
+        // Tiempo real: ver lo que otros puestos y la cocina hagan en esta comanda. El aviso solo indica que hay
+        // que volver a leer; el estado siempre sale de la base de datos.
+        _subscription = Bus.Subscribe(OnEventAsync);
+
+        // Refresco de respaldo por si se pierde algún aviso (p. ej. tras una reconexión).
+        _timer = new Timer(_ => _ = ScheduleReloadAsync(), null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
+    }
+
+    private Task OnEventAsync(OperationEvent e) =>
+        e.OrderId == OrderId ? ScheduleReloadAsync() : Task.CompletedTask;
+
+    private async Task ScheduleReloadAsync()
+    {
+        if (Interlocked.Exchange(ref _reloadPending, 1) == 1)
+        {
+            return;
+        }
+
+        await Task.Delay(100);
+        Interlocked.Exchange(ref _reloadPending, 0);
+        await InvokeAsync(async () =>
+        {
+            if (!_busy)
+            {
+                await ReloadAsync();
+                StateHasChanged();
+            }
+        });
+    }
+
+    private async Task ReloadAsync()
+    {
+        var result = await Runner.RunAsync<OrderService, OrderView>((s, ct) => s.GetAsync(OrderId, ct));
+        Apply(result);
+    }
+
+    private void Apply(UiResult<OrderView> result)
+    {
+        if (result.Ok)
+        {
+            _order = result.Value;
+            _error = null;
+        }
+        else
+        {
+            _error = result.Error;
+        }
+    }
+
+    /// <summary>Ejecuta una acción evitando dobles pulsaciones mientras está en curso.</summary>
+    private async Task GuardedAsync(Func<Task> action)
+    {
+        if (_busy)
+        {
+            return;
+        }
+
+        _busy = true;
+        _info = null;
+        try
+        {
+            await action();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private Task AddAsync(ProductTile product) => GuardedAsync(async () =>
+    {
+        var requestId = Guid.NewGuid(); // una clave por pulsación: un reintento automático no duplica la línea
+        var notes = _nextNotes;
+        var result = await Runner.RunAsync<OrderService, OrderView>((s, ct) => s.AddLineAsync(OrderId, product.Id, 1, notes, requestId, ct));
+        Apply(result);
+        if (result.Ok)
+        {
+            _nextNotes = null;
+        }
+    });
+
+    private Task ChangeQuantityAsync(OrderLineView line, decimal quantity) => GuardedAsync(async () =>
+    {
+        if (quantity < 1)
+        {
+            _confirmRemoveId = line.Id;
+            return;
+        }
+
+        Apply(await Runner.RunAsync<OrderService, OrderView>((s, ct) => s.ChangeQuantityAsync(OrderId, line.Id, quantity, ct)));
+    });
+
+    private Task RemoveAsync(OrderLineView line) => GuardedAsync(async () =>
+    {
+        _confirmRemoveId = null;
+        Apply(await Runner.RunAsync<OrderService, OrderView>((s, ct) => s.RemoveLineAsync(OrderId, line.Id, ct)));
+    });
+
+    private void StartVoid(OrderLineView line)
+    {
+        _voidLineId = line.Id;
+        _voidReason = null;
+    }
+
+    private void CancelVoid()
+    {
+        _voidLineId = null;
+        _voidReason = null;
+    }
+
+    private Task VoidAsync(OrderLineView line) => GuardedAsync(async () =>
+    {
+        var reason = _voidReason ?? string.Empty;
+        var result = await Runner.RunAsync<OrderService, OrderView>((s, ct) => s.VoidLineAsync(OrderId, line.Id, reason, ct));
+        Apply(result);
+        if (result.Ok)
+        {
+            CancelVoid();
+        }
+    });
+
+    private Task SendAsync() => GuardedAsync(async () =>
+    {
+        var requestId = Guid.NewGuid();
+        var result = await Runner.RunAsync<OrderService, SendResult>((s, ct) => s.SendToKitchenAsync(OrderId, requestId, ct));
+        if (result.Ok)
+        {
+            var tickets = result.Value!.Tickets;
+            _info = result.Value.AlreadyProcessed
+                ? "El envío ya estaba registrado."
+                : "Enviado: " + string.Join(" y ", tickets.Select(t => $"{(t.Station == PreparationStation.Bar ? "barra" : "cocina")} ({t.LineCount})")) + ".";
+            if (result.Value.Unprinted.Count > 0)
+            {
+                _error = "No hay impresora configurada para " +
+                         string.Join(" y ", result.Value.Unprinted.Select(s => s == PreparationStation.Bar ? "barra" : "cocina")) +
+                         ": el pedido está en la pantalla de cocina pero NO se ha imprimido.";
+            }
+
+            await ReloadAsync();
+        }
+        else
+        {
+            _error = result.Error;
+        }
+    });
+
+    private Task RequestBillAsync() => GuardedAsync(async () =>
+        Apply(await Runner.RunAsync<OrderService, OrderView>((s, ct) => s.RequestBillAsync(OrderId, ct))));
+
+    private Task ReopenAsync() => GuardedAsync(async () =>
+        Apply(await Runner.RunAsync<OrderService, OrderView>((s, ct) => s.ReopenAsync(OrderId, ct))));
+
+    private Task CancelOrderAsync() => GuardedAsync(async () =>
+    {
+        var result = await Runner.RunAsync<OrderService>((s, ct) => s.CancelAsync(OrderId, ct));
+        if (result.Ok)
+        {
+            Navigation.NavigateTo("/mesas");
+            return;
+        }
+
+        _confirmCancel = false;
+        _error = result.Error;
+    });
+
+    private static string StatusText(OrderStatus status) => status switch
+    {
+        OrderStatus.Open => "abierta",
+        OrderStatus.PendingPayment => "pendiente de cobro",
+        OrderStatus.Paid => "cobrada",
+        _ => "cancelada",
+    };
+
+    private static string LineStatusText(OrderLineStatus status) => status switch
+    {
+        OrderLineStatus.Pending => "Sin enviar",
+        OrderLineStatus.Sent => "Enviada",
+        OrderLineStatus.Preparing => "En preparación",
+        OrderLineStatus.Ready => "Preparada",
+        OrderLineStatus.Delivered => "Entregada",
+        _ => "Anulada",
+    };
+
+    public void Dispose()
+    {
+        _timer?.Dispose();
+        _subscription?.Dispose();
+    }
+}

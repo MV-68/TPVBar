@@ -1,0 +1,325 @@
+@page "/facturas/{InvoiceId:long}"
+@attribute [Authorize(Policy = Policies.IssueInvoices)]
+@using Microsoft.AspNetCore.Authorization
+@using TPVBar.Application.Features.Invoicing
+@using TPVBar.Domain.Invoicing
+@inject UseCaseRunner Runner
+@inject IJSRuntime Js
+
+<PageTitle>Factura · TPVBar</PageTitle>
+
+<main class="page page--wide">
+    <div class="order__head no-print">
+        <a class="btn btn--light-border" href="/facturas">← Facturas</a>
+        <h1>Factura @_view?.FullNumber</h1>
+    </div>
+
+    @if (_error is not null) { <p class="alert alert--error no-print" role="alert">@_error</p> }
+    @if (_info is not null) { <p class="alert alert--ok no-print" role="status">@_info</p> }
+
+    @if (_view is null)
+    {
+        @if (_error is null) { <p>Cargando…</p> }
+    }
+    else
+    {
+        var v = _view;
+        <article class="invoice" aria-label="Factura @v.FullNumber">
+            <header class="invoice__head">
+                <div>
+                    <strong>@v.IssuerName</strong><br />
+                    NIF @v.IssuerNif<br />
+                    @v.IssuerAddress
+                </div>
+                <div class="invoice__id">
+                    <strong>@KindTitle(v)</strong><br />
+                    Nº @v.FullNumber<br />
+                    Fecha: @v.IssueDate.ToString("dd/MM/yyyy")<br />
+                    Tipo @v.TypeCode
+                </div>
+            </header>
+
+            @if (v.Cancelled)
+            {
+                <p class="alert alert--error" role="alert">FACTURA ANULADA @(v.CancellationReason is null ? "" : "· " + v.CancellationReason)</p>
+            }
+
+            @if (v.RecipientName is not null)
+            {
+                <p><strong>Cliente:</strong> @v.RecipientName · NIF @v.RecipientNif<br />@v.RecipientAddress</p>
+            }
+            else
+            {
+                <p class="muted">Factura simplificada: sin datos del cliente.</p>
+            }
+
+            @if (v.RectifiedInvoiceNumber is not null)
+            {
+                <p><strong>Rectifica la factura</strong> <a href="@($"/facturas/{v.RectifiedInvoiceId}")">@v.RectifiedInvoiceNumber</a> (por diferencias). Motivo: @v.RectificationReason</p>
+            }
+
+            <table class="grid grid--compact">
+                <caption class="sr-only">Líneas de la factura</caption>
+                <thead>
+                    <tr><th scope="col">Concepto</th><th scope="col" class="num">Cant.</th><th scope="col" class="num">Precio (IVA incl.)</th><th scope="col" class="num">IVA %</th><th scope="col" class="num">Base</th><th scope="col" class="num">Cuota</th><th scope="col" class="num">Total</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var l in v.Lines)
+                    {
+                        <tr>
+                            <td>@l.Description</td>
+                            <td class="num">@l.Quantity.ToString("0.###")</td>
+                            <td class="num">@l.UnitPrice.ToString("C")</td>
+                            <td class="num">@l.TaxRate.ToString("0.##")</td>
+                            <td class="num">@l.Base.ToString("C")</td>
+                            <td class="num">@l.Tax.ToString("C")</td>
+                            <td class="num">@l.Total.ToString("C")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+
+            <table class="grid grid--compact">
+                <caption>Desglose por tipo de IVA</caption>
+                <thead><tr><th scope="col" class="num">Tipo</th><th scope="col" class="num">Base imponible</th><th scope="col" class="num">Cuota</th><th scope="col" class="num">Total</th></tr></thead>
+                <tbody>
+                    @foreach (var b in v.TaxBreakdown)
+                    {
+                        <tr><td class="num">@b.TaxRate.ToString("0.##") %</td><td class="num">@b.Base.ToString("C")</td><td class="num">@b.Tax.ToString("C")</td><td class="num">@b.Total.ToString("C")</td></tr>
+                    }
+                </tbody>
+                <tfoot><tr><th scope="row" class="num">Total</th><td class="num">@v.Base.ToString("C")</td><td class="num">@v.Tax.ToString("C")</td><td class="num"><strong>@v.Total.ToString("C")</strong></td></tr></tfoot>
+            </table>
+
+            <footer class="invoice__qr">
+                <div class="qr" aria-label="Código QR de cotejo">@((MarkupString)_qr)</div>
+                <div class="muted">
+                    <p>QR de cotejo con los datos de la factura (NIF emisor, número, fecha e importe). Apunta a la URL configurada:
+                        <code>@(new Uri(v.QrUrl).GetLeftPart(UriPartial.Path))</code>.</p>
+                    @if (v.ShowVeriFactuLegend)
+                    {
+                        <p><strong>VERI*FACTU</strong> · Factura verificable en la sede electrónica de la AEAT. Estado del envío: <strong>@SubmissionText(v.Submission)</strong>@(v.SubmissionCsv is null ? "" : $" (CSV {v.SubmissionCsv})").</p>
+                    }
+                    else
+                    {
+                        <p><strong>Esta factura NO ha sido enviada a la AEAT</strong> (estado: @SubmissionText(v.Submission)). El envío está desactivado en este servidor, por eso no lleva la leyenda «VERI*FACTU».</p>
+                    }
+                    @if (v.SubmissionMessage is not null)
+                    {
+                        <p class="alert" role="note">Mensaje de la AEAT / del envío: @v.SubmissionMessage</p>
+                    }
+                    <p>Registro de facturación nº @v.RecordSequence · huella <code class="hash">@v.RecordHash</code></p>
+                </div>
+            </footer>
+        </article>
+
+        <div class="form-actions no-print">
+            <button type="button" class="btn btn--primary" @onclick="PrintAsync">Imprimir / guardar PDF</button>
+            <a class="btn" href="@($"/cobro/{v.OrderId}")">Ver cobro de la comanda</a>
+        </div>
+
+        @if (v.Rectifications.Count > 0)
+        {
+            <section class="no-print" aria-labelledby="rects">
+                <h2 id="rects">Rectificativas de esta factura</h2>
+                <ul class="plain">
+                    @foreach (var r in v.Rectifications)
+                    {
+                        <li><a href="@($"/facturas/{r.Id}")">@r.FullNumber</a> · @r.Total.ToString("C")</li>
+                    }
+                </ul>
+            </section>
+        }
+
+        @if (!v.Cancelled && v.Kind != InvoiceKind.Rectificative)
+        {
+            <AuthorizeView Policy="@Policies.RectifyInvoices">
+                <section class="panel no-print" aria-labelledby="rectificar">
+                    <h2 id="rectificar">Rectificar (devolver líneas)</h2>
+                    <p class="muted">
+                        Emite una factura rectificativa por diferencias, con importes en negativo, de las cantidades que indique. <strong>No devuelve dinero</strong>:
+                        la devolución del efectivo se registra aparte, en la pantalla de cobro.
+                    </p>
+                    @if (v.Lines.All(l => l.RectifiableQuantity <= 0))
+                    {
+                        <p class="muted">Todas las líneas ya están rectificadas.</p>
+                    }
+                    else
+                    {
+                        <table class="grid grid--compact">
+                            <thead><tr><th scope="col">Concepto</th><th scope="col" class="num">Rectificable</th><th scope="col">Cantidad a rectificar</th></tr></thead>
+                            <tbody>
+                                @foreach (var l in v.Lines.Where(l => l.RectifiableQuantity > 0))
+                                {
+                                    var id = l.Id;
+                                    <tr>
+                                        <td>@l.Description</td>
+                                        <td class="num">@l.RectifiableQuantity.ToString("0.###")</td>
+                                        <td><input type="number" min="0" max="@l.RectifiableQuantity.ToString(System.Globalization.CultureInfo.InvariantCulture)" step="any" aria-label="Cantidad de @l.Description"
+                                                   value="@Quantity(id)" @onchange="e => SetQuantity(id, e.Value?.ToString())" /></td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                        <label>Motivo (obligatorio)
+                            <input type="text" maxlength="250" @bind="_rectReason" />
+                        </label>
+                        <button type="button" class="btn btn--primary" disabled="@(_busy || string.IsNullOrWhiteSpace(_rectReason) || !_quantities.Values.Any(q => q > 0))" @onclick="RectifyAsync">Emitir rectificativa</button>
+                    }
+                </section>
+
+                @if (v.Rectifications.Count == 0)
+                {
+                    <section class="panel no-print" aria-labelledby="anular">
+                        <h2 id="anular">Anular factura emitida por error</h2>
+                        <p class="muted">Genera un registro de anulación; la factura no se borra. Solo para facturas que nunca debieron existir (después se puede emitir otra). Si hubo una venta real, rectifique.</p>
+                        <label>Motivo (obligatorio)
+                            <input type="text" maxlength="250" @bind="_cancelReason" />
+                        </label>
+                        @if (!_confirmCancel)
+                        {
+                            <button type="button" class="btn" disabled="@(_busy || string.IsNullOrWhiteSpace(_cancelReason))" @onclick="() => _confirmCancel = true">Anular…</button>
+                        }
+                        else
+                        {
+                            <div class="confirm" role="alertdialog" aria-label="Confirmar anulación">
+                                <p>¿Anular la factura <strong>@v.FullNumber</strong>? No se puede deshacer.</p>
+                                <div class="form-actions">
+                                    <button type="button" class="btn btn--primary" disabled="@_busy" @onclick="CancelAsync">Confirmar anulación</button>
+                                    <button type="button" class="btn" @onclick="() => _confirmCancel = false">Volver</button>
+                                </div>
+                            </div>
+                        }
+                    </section>
+                }
+            </AuthorizeView>
+        }
+    }
+</main>
+
+@code {
+    [Parameter]
+    public long InvoiceId { get; set; }
+
+    private InvoiceView? _view;
+    private string _qr = string.Empty;
+    private string? _error;
+    private string? _info;
+    private bool _busy;
+    private string _rectReason = string.Empty;
+    private string _cancelReason = string.Empty;
+    private bool _confirmCancel;
+    private readonly Dictionary<long, decimal> _quantities = [];
+    private Guid? _rectKey;
+    private Guid? _cancelKey;
+
+    protected override Task OnParametersSetAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var result = await Runner.RunAsync<InvoiceService, InvoiceView>((s, ct) => s.GetAsync(InvoiceId, ct));
+        _error = result.Error;
+        if (result.Ok)
+        {
+            _view = result.Value;
+            _qr = QrSvg.Render(_view!.QrUrl);
+        }
+    }
+
+    private decimal Quantity(long lineId) => _quantities.GetValueOrDefault(lineId);
+
+    private void SetQuantity(long lineId, string? text)
+    {
+        _rectKey = null; // otra rectificación = otra operación
+        _quantities[lineId] = decimal.TryParse(text, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.CurrentCulture, out var q) && q > 0 ? q : 0;
+    }
+
+    private async Task RectifyAsync()
+    {
+        if (_busy || _view is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        _info = null;
+        try
+        {
+            var key = _rectKey ??= Guid.NewGuid();
+            var lines = _quantities.Where(q => q.Value > 0).Select(q => new RectifyLineRequest(q.Key, q.Value)).ToList();
+            var request = new RectifyInvoiceRequest(_view.Id, _rectReason, lines, key);
+            var result = await Runner.RunAsync<InvoiceService, IssueInvoiceResult>((s, ct) => s.RectifyAsync(request, ct));
+            if (result.Ok)
+            {
+                _rectKey = null;
+                _quantities.Clear();
+                _rectReason = string.Empty;
+                _info = result.Value!.AlreadyProcessed ? "Esta rectificación ya estaba emitida." : $"Rectificativa {result.Value.FullNumber} emitida.";
+                await LoadAsync();
+            }
+            else
+            {
+                _error = result.Error;
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task CancelAsync()
+    {
+        if (_busy || _view is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        _info = null;
+        try
+        {
+            var key = _cancelKey ??= Guid.NewGuid();
+            var reason = _cancelReason;
+            var id = _view.Id;
+            var result = await Runner.RunAsync<InvoiceService, bool>(async (s, ct) =>
+            {
+                await s.CancelAsync(id, reason, key, ct);
+                return true;
+            });
+            _error = result.Error;
+            _confirmCancel = false;
+            if (result.Ok)
+            {
+                _cancelKey = null;
+                _cancelReason = string.Empty;
+                _info = "Factura anulada: se ha generado el registro de anulación.";
+                await LoadAsync();
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task PrintAsync() => await Js.InvokeVoidAsync("print");
+
+    private static string KindTitle(InvoiceView v) => v.Kind switch
+    {
+        InvoiceKind.Simplified => "FACTURA SIMPLIFICADA",
+        InvoiceKind.Complete => "FACTURA",
+        _ => "FACTURA RECTIFICATIVA",
+    };
+
+    private static string SubmissionText(SubmissionStatus s) => s switch
+    {
+        SubmissionStatus.Pending => "pendiente de envío",
+        SubmissionStatus.Sent => "enviada",
+        SubmissionStatus.Accepted => "aceptada por la AEAT",
+        SubmissionStatus.AcceptedWithErrors => "aceptada con errores",
+        _ => "rechazada por la AEAT",
+    };
+}

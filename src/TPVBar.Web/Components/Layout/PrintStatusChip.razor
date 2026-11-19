@@ -1,0 +1,73 @@
+@implements IDisposable
+@using TPVBar.Application.Features.Printing
+@inject UseCaseRunner Runner
+@inject OperationEventBus Bus
+
+@if (_summary is not null)
+{
+    <a class="chip chip--@Level" href="@(_canManage ? "configuracion/impresoras" : null)" title="@(_summary.LastError ?? "Estado de la impresión")" role="status">
+        <span aria-hidden="true">@Icon</span> @Text
+    </a>
+}
+
+@code {
+    private PrintSummary? _summary;
+    private bool _canManage;
+    private IDisposable? _subscription;
+    private Timer? _timer;
+
+    [CascadingParameter]
+    private Task<AuthenticationState>? AuthState { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (AuthState is not null)
+        {
+            var user = (await AuthState).User;
+            _canManage = user.HasClaim(TpvClaimTypes.Permission, nameof(TPVBar.Domain.Security.Permission.ManagePrinting));
+        }
+
+        await LoadAsync();
+        _subscription = Bus.Subscribe(e =>
+            e.Name is OperationEventNames.PrintJobCreated or OperationEventNames.PrinterStatusChanged
+                ? InvokeAsync(async () => { await LoadAsync(); StateHasChanged(); })
+                : Task.CompletedTask);
+        _timer = new Timer(_ => _ = InvokeAsync(async () => { await LoadAsync(); StateHasChanged(); }), null, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15));
+    }
+
+    private async Task LoadAsync()
+    {
+        var result = await Runner.RunAsync<PrintAdminService, PrintSummary>((s, ct) => s.GetSummaryAsync(ct));
+        _summary = result.Ok ? result.Value : null;
+    }
+
+    private string Level => _summary switch
+    {
+        null => "ok",
+        { AnyPrinterConfigured: false } => "warn",
+        { Failed: > 0 } => "error",
+        { Pending: > 0, AgentOnline: false } => "error",
+        { AgentOnline: false } => "warn",
+        { Pending: > 0 } => "warn",
+        _ => "ok",
+    };
+
+    private string Icon => Level == "ok" ? "✔" : "⚠";
+
+    private string Text => _summary switch
+    {
+        null => string.Empty,
+        { AnyPrinterConfigured: false } => "Impresión: sin impresoras configuradas",
+        { Failed: > 0 } => $"Impresión: {_summary.Failed} trabajo(s) fallido(s)",
+        { Pending: > 0, AgentOnline: false } => $"Agente de impresión sin conexión · {_summary.Pending} en cola",
+        { AgentOnline: false } => "Agente de impresión sin conexión",
+        { Pending: > 0 } => $"Impresión: {_summary.Pending} en cola",
+        _ => "Impresión: OK",
+    };
+
+    public void Dispose()
+    {
+        _timer?.Dispose();
+        _subscription?.Dispose();
+    }
+}

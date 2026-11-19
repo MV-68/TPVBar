@@ -1,0 +1,26 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Capa de infraestructura: persistencia (EF Core + Npgsql), impresión, seguridad y servicios. -->
+  <ItemGroup>
+    <ProjectReference Include="..\TPVBar.Application\TPVBar.Application.csproj" />
+    <ProjectReference Include="..\TPVBar.Domain\TPVBar.Domain.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Esquemas oficiales de la AEAT (SuministroLR, SuministroInformacion, RespuestaSuministro) y xmldsig: validan cada envío. El WSDL solo es referencia. -->
+    <EmbeddedResource Include="Billing\Schemas\*.xsd" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- PasswordHasher de ASP.NET Core Identity (Microsoft.Extensions.Identity.Core) viene en el framework compartido. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+    <PackageReference Include="EFCore.NamingConventions" />
+  </ItemGroup>
+
+</Project>

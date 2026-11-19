@@ -1,0 +1,12 @@
+<span class="bar" aria-hidden="true"><span class="bar__fill" style="width:@Percent.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)%"></span></span>
+
+@code {
+    [Parameter]
+    public decimal Value { get; set; }
+
+    [Parameter]
+    public decimal Max { get; set; }
+
+    // Barra decorativa: las cifras exactas siempre están en la tabla, la barra solo ayuda a comparar.
+    private decimal Percent => Max <= 0 ? 0 : Math.Clamp(Value / Max * 100m, 0, 100);
+}

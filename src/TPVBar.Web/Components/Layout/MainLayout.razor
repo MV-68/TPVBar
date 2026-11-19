@@ -1,0 +1,26 @@
+﻿@inherits LayoutComponentBase
+
+<header class="topbar">
+    <a class="topbar__brand" href="/">TPVBar</a>
+    <NavMenu />
+    <AuthorizeView>
+        <Authorized>
+            <StockChip />
+            <CashStatusChip />
+            <PrintStatusChip />
+            <span class="topbar__user">@context.User.FindFirst(TpvClaimTypes.DisplayName)?.Value</span>
+            <form method="post" action="/auth/logout" class="topbar__logout">
+                <AntiforgeryToken />
+                <button type="submit" class="btn btn--light">Cerrar sesión</button>
+            </form>
+        </Authorized>
+    </AuthorizeView>
+</header>
+
+@Body
+
+<div id="blazor-error-ui" data-nosnippet>
+    Se ha producido un error inesperado.
+    <a href="." class="reload">Recargar</a>
+    <span class="dismiss">🗙</span>
+</div>

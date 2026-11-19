@@ -1,0 +1,38 @@
+@implements IDisposable
+@using TPVBar.Application.Features.Cash
+@inject UseCaseRunner Runner
+@inject OperationEventBus Bus
+
+@if (_status is not null)
+{
+    <a class="chip chip--@(_status.IsOpen ? "ok" : "warn")" href="caja" role="status" title="Estado de la caja">
+        <span aria-hidden="true">@(_status.IsOpen ? "✔" : "⚠")</span> @(_status.IsOpen ? "Caja abierta" : "Caja cerrada")
+    </a>
+}
+
+@code {
+    private CashStatus? _status;
+    private IDisposable? _subscription;
+    private Timer? _timer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+        _subscription = Bus.Subscribe(e => e.Name == OperationEventNames.CashSessionChanged
+            ? InvokeAsync(async () => { await LoadAsync(); StateHasChanged(); })
+            : Task.CompletedTask);
+        _timer = new Timer(_ => _ = InvokeAsync(async () => { await LoadAsync(); StateHasChanged(); }), null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
+    }
+
+    private async Task LoadAsync()
+    {
+        var result = await Runner.RunAsync<CashService, CashStatus>((s, ct) => s.GetStatusAsync(ct));
+        _status = result.Ok ? result.Value : null; // sin permiso de caja: no se muestra
+    }
+
+    public void Dispose()
+    {
+        _timer?.Dispose();
+        _subscription?.Dispose();
+    }
+}

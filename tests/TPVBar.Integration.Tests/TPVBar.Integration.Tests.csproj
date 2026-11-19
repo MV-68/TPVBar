@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <!-- Mismo identificador que TPVBar.Web: comparte sus User Secrets (ConnectionStrings:TpvBarTest). -->
+    <UserSecretsId>tpvbar-web-7c98b12e-0a1c-40c5-8275-6cf0cce2b52c</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.UserSecrets" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\TPVBar.Web\TPVBar.Web.csproj" />
+    <ProjectReference Include="..\..\src\TPVBar.Infrastructure\TPVBar.Infrastructure.csproj" />
+    <!-- Alias: web y agente tienen ambos una clase Program; el alias evita la ambigüedad. -->
+    <ProjectReference Include="..\..\src\TPVBar.PrintAgent\TPVBar.PrintAgent.csproj" Aliases="agent" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>

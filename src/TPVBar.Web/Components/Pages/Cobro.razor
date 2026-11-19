@@ -1,0 +1,365 @@
+@page "/cobro/{OrderId:long}"
+@attribute [Authorize(Policy = Policies.TakePayments)]
+@implements IDisposable
+@using Microsoft.AspNetCore.Authorization
+@using TPVBar.Application.Features.Cash
+@using TPVBar.Domain.Sales
+@inject UseCaseRunner Runner
+@inject OperationEventBus Bus
+
+<PageTitle>Cobro · TPVBar</PageTitle>
+
+<main class="page checkout">
+    @if (_view is null)
+    {
+        @if (_error is not null)
+        {
+            <p class="alert alert--error" role="alert">@_error</p>
+            <a class="btn btn--primary" href="/mesas">Volver a mesas</a>
+        }
+        else
+        {
+            <p>Cargando cobro…</p>
+        }
+    }
+    else
+    {
+        <div class="order__head">
+            <a class="btn btn--light-border" href="@($"/comanda/{_view.OrderId}")">← Comanda</a>
+            <h1>Cobro · @_view.TableLabel</h1>
+        </div>
+
+        @if (_error is not null)
+        {
+            <p class="alert alert--error" role="alert">@_error</p>
+        }
+        @if (_info is not null)
+        {
+            <p class="alert alert--ok" role="status">@_info</p>
+        }
+
+        <div class="split">
+            <section aria-labelledby="cuenta">
+                <h2 id="cuenta">Cuenta</h2>
+                <ul class="lines">
+                    @foreach (var line in _view.Lines)
+                    {
+                        <li class="line"><div class="line__main"><span class="line__qty">@line.Quantity.ToString("0.###")×</span><span class="line__name">@line.Name</span><span class="line__total">@line.LineTotal.ToString("C")</span></div></li>
+                    }
+                </ul>
+                <dl class="totals">
+                    <div><dt>Base imponible</dt><dd>@_view.Subtotal.ToString("C")</dd></div>
+                    <div><dt>IVA incluido</dt><dd>@_view.TaxTotal.ToString("C")</dd></div>
+                    <div class="totals__grand"><dt>Total</dt><dd>@_view.GrandTotal.ToString("C")</dd></div>
+                    <div><dt>Cobrado</dt><dd>@_view.PaidTotal.ToString("C")</dd></div>
+                    <div class="totals__balance"><dt>Pendiente</dt><dd>@_view.Balance.ToString("C")</dd></div>
+                </dl>
+
+                @if (_view.Payments.Count > 0)
+                {
+                    <h2>Cobros registrados</h2>
+                    <ul class="plain">
+                        @foreach (var p in _view.Payments)
+                        {
+                            <li>
+                                <strong>@p.Method</strong> @p.Amount.ToString("C")
+                                @if (p.Tendered is { } t && p.Change > 0) { <span class="muted">(entregado @t.ToString("C"), cambio @p.Change.ToString("C"))</span> }
+                                @if (!string.IsNullOrEmpty(p.Reference)) { <span class="muted">ref. @p.Reference</span> }
+                                @if (p.Refunded > 0) { <span class="badge badge--bill">Devuelto @p.Refunded.ToString("C")</span> }
+                            </li>
+                        }
+                    </ul>
+                }
+            </section>
+
+            <section class="panel" aria-labelledby="cobrar">
+                @if (_view.IsPaid)
+                {
+                    <h2 id="cobrar">Comanda cobrada</h2>
+                    <p class="alert alert--ok" role="status">La cuenta está saldada y la mesa queda libre.</p>
+                    @if (_lastChange > 0)
+                    {
+                        <p class="change-due" role="status">Cambio a devolver: <strong>@_lastChange.ToString("C")</strong></p>
+                    }
+                    @if (_receiptInfo is not null)
+                    {
+                        <p class="muted">@_receiptInfo</p>
+                    }
+                    <div class="form-actions">
+                        <button type="button" class="btn" disabled="@_busy" @onclick="ReprintAsync">Reimprimir justificante</button>
+                        <a class="btn btn--primary" href="/mesas">Volver a mesas</a>
+                    </div>
+                    <AuthorizeView Policy="@Policies.IssueInvoices">
+                        <OrderInvoicePanel OrderId="OrderId" />
+                    </AuthorizeView>
+                }
+                else if (!_view.CashOpen)
+                {
+                    <h2 id="cobrar">Caja cerrada</h2>
+                    <p class="alert alert--error" role="alert">No hay una caja abierta. Un encargado debe abrirla en «Caja» antes de cobrar.</p>
+                }
+                else if (_view.HasPendingLines)
+                {
+                    <h2 id="cobrar">Cobrar</h2>
+                    <p class="alert" role="alert">Hay líneas sin enviar. Envíelas o quítelas en la comanda antes de cobrar.</p>
+                }
+                else if (_view.Status is OrderStatus.Open or OrderStatus.PendingPayment && _view.Balance > 0)
+                {
+                    <h2 id="cobrar">Cobrar</h2>
+                    <p class="muted">Elija el método. Se puede cobrar en varios pagos y con distintos métodos hasta saldar la cuenta.</p>
+
+                    <div class="methods" role="radiogroup" aria-label="Método de pago">
+                        @foreach (var m in _view.Methods)
+                        {
+                            <button type="button" role="radio" aria-checked="@(m.Id == _methodId)" class="method @(m.Id == _methodId ? "method--active" : "")"
+                                    disabled="@_busy" @onclick="() => SelectMethod(m)">@m.Name</button>
+                        }
+                    </div>
+
+                    @if (SelectedMethod is { } method)
+                    {
+                        <label>Importe a cobrar (€)
+                            <input type="number" step="0.01" min="0.01" max="@_view.Balance.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)" @bind="_amount" @bind:after="OnAmountChanged" />
+                        </label>
+                        <div class="quick">
+                            <button type="button" class="btn btn--small" @onclick="() => SetAmount(_view.Balance)">Todo (@_view.Balance.ToString("C"))</button>
+                            @if (_view.Balance > 1)
+                            {
+                                <button type="button" class="btn btn--small" @onclick="() => SetAmount(Math.Round(_view.Balance / 2, 2))">Mitad</button>
+                            }
+                        </div>
+
+                        @if (method.IsCash)
+                        {
+                            <label>Efectivo entregado (€)
+                                <input type="number" step="0.01" min="0" @bind="_tendered" />
+                            </label>
+                            <div class="quick">
+                                @foreach (var note in new[] { 5, 10, 20, 50 })
+                                {
+                                    <button type="button" class="btn btn--small" disabled="@(note < _amount)" @onclick="() => _tendered = note">@note €</button>
+                                }
+                                <button type="button" class="btn btn--small" @onclick="() => _tendered = _amount">Exacto</button>
+                            </div>
+                            <p class="change-due" aria-live="polite">
+                                @if (_tendered >= _amount && _amount > 0)
+                                {
+                                    <text>Cambio: <strong>@((_tendered - _amount).ToString("C"))</strong></text>
+                                }
+                                else
+                                {
+                                    <text>Falta efectivo: el entregado es menor que el importe.</text>
+                                }
+                            </p>
+                        }
+                        else
+                        {
+                            @if (method.Code == "CARD")
+                            {
+                                <p class="alert">El cobro con tarjeta se <strong>registra a mano</strong>: TPVBar no se comunica con el datáfono. Cobre primero en el datáfono y registre después.</p>
+                            }
+                            <label>Referencia @(method.RequiresReference ? "(obligatoria)" : "(opcional)")
+                                <input type="text" maxlength="120" @bind="_reference" placeholder="Nº de operación del datáfono…" />
+                            </label>
+                        }
+
+                        @if (!_confirming)
+                        {
+                            <button type="button" class="btn btn--primary btn--big" disabled="@(_busy || !CanSubmit)" @onclick="() => _confirming = true">
+                                Cobrar @_amount.ToString("C")
+                            </button>
+                        }
+                        else
+                        {
+                            <div class="confirm" role="alertdialog" aria-label="Confirmar cobro">
+                                <p>¿Registrar el cobro de <strong>@_amount.ToString("C")</strong> con <strong>@method.Name</strong>?</p>
+                                <div class="form-actions">
+                                    <button type="button" class="btn btn--primary btn--big" disabled="@_busy" @onclick="PayAsync">Confirmar cobro</button>
+                                    <button type="button" class="btn btn--big" disabled="@_busy" @onclick="() => _confirming = false">Volver</button>
+                                </div>
+                            </div>
+                        }
+                    }
+                }
+                else
+                {
+                    <p class="alert">Esta comanda no admite cobros en su estado actual.</p>
+                }
+            </section>
+        </div>
+    }
+</main>
+
+@code {
+    [Parameter]
+    public long OrderId { get; set; }
+
+    private CheckoutView? _view;
+    private int _methodId;
+    private decimal _amount;
+    private decimal _tendered;
+    private string? _reference;
+    private string? _error;
+    private string? _info;
+    private string? _receiptInfo;
+    private decimal _lastChange;
+    private bool _busy;
+    private bool _confirming;
+    private Guid? _requestId;
+    private IDisposable? _subscription;
+    private int _reloadPending;
+
+    private PaymentMethodView? SelectedMethod => _view?.Methods.FirstOrDefault(m => m.Id == _methodId);
+
+    private bool CanSubmit =>
+        SelectedMethod is { } m && _amount > 0 && _view is { } v && _amount <= v.Balance &&
+        (!m.IsCash || _tendered >= _amount) && (!m.RequiresReference || !string.IsNullOrWhiteSpace(_reference));
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+        _subscription = Bus.Subscribe(e => e.OrderId == OrderId ? ScheduleReloadAsync() : Task.CompletedTask);
+    }
+
+    private async Task ScheduleReloadAsync()
+    {
+        if (Interlocked.Exchange(ref _reloadPending, 1) == 1)
+        {
+            return;
+        }
+
+        await Task.Delay(100);
+        Interlocked.Exchange(ref _reloadPending, 0);
+        await InvokeAsync(async () =>
+        {
+            if (!_busy)
+            {
+                await LoadAsync();
+                StateHasChanged();
+            }
+        });
+    }
+
+    private async Task LoadAsync()
+    {
+        var result = await Runner.RunAsync<PaymentService, CheckoutView>((s, ct) => s.GetCheckoutAsync(OrderId, ct));
+        if (!result.Ok)
+        {
+            _error = result.Error;
+            return;
+        }
+
+        _view = result.Value;
+        if (_methodId == 0 || _view!.Methods.All(m => m.Id != _methodId))
+        {
+            _methodId = _view!.Methods.FirstOrDefault()?.Id ?? 0;
+            ResetAmounts();
+        }
+
+        if (_amount > _view!.Balance || _amount <= 0)
+        {
+            ResetAmounts();
+        }
+    }
+
+    private void ResetAmounts()
+    {
+        _amount = _view?.Balance ?? 0;
+        _tendered = _amount;
+    }
+
+    private void SelectMethod(PaymentMethodView method)
+    {
+        _methodId = method.Id;
+        _reference = null;
+        _tendered = _amount;
+        _confirming = false;
+        _requestId = null;
+    }
+
+    private void SetAmount(decimal amount)
+    {
+        _amount = amount;
+        OnAmountChanged();
+    }
+
+    private void OnAmountChanged()
+    {
+        _confirming = false;
+        _requestId = null; // otro importe = otra operación
+        if (_tendered < _amount)
+        {
+            _tendered = _amount;
+        }
+    }
+
+    private async Task PayAsync()
+    {
+        if (_busy || SelectedMethod is not { } method)
+        {
+            return;
+        }
+
+        _busy = true;
+        _info = null;
+        _error = null;
+        try
+        {
+            // La misma clave se conserva hasta que el cobro se confirma: un reintento (cortes de red, doble clic)
+            // nunca cobra dos veces.
+            var key = _requestId ??= Guid.NewGuid();
+            var request = new PayRequest(OrderId, method.Id, _amount, method.IsCash ? _tendered : null, _reference, key);
+            var result = await Runner.RunAsync<PaymentService, PayResult>((s, ct) => s.PayAsync(request, ct));
+
+            if (result.Ok)
+            {
+                _requestId = null;
+                _confirming = false;
+                _reference = null;
+                _lastChange = result.Value!.Change;
+                _info = result.Value.AlreadyProcessed ? "Este cobro ya estaba registrado." : $"Cobro de {request.Amount:C} registrado.";
+                if (result.Value.OrderPaid)
+                {
+                    _receiptInfo = result.Value.ReceiptQueued
+                        ? "Justificante enviado a la cola de impresión (no es una factura)."
+                        : "No hay impresora de tickets configurada: no se ha impreso el justificante.";
+                }
+
+                await LoadAsync();
+                ResetAmounts();
+            }
+            else
+            {
+                _error = result.Error;
+                _confirming = false;
+                await LoadAsync();
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ReprintAsync()
+    {
+        if (_busy)
+        {
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var result = await Runner.RunAsync<PaymentService, bool>((s, ct) => s.ReprintReceiptAsync(OrderId, ct));
+            _error = result.Error;
+            _info = result.Ok ? (result.Value ? "Justificante reencolado (queda auditado)." : "No hay impresora de tickets configurada.") : null;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    public void Dispose() => _subscription?.Dispose();
+}

@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Contrato compartido entre el servidor y el agente de impresión (documentos y mensajes de la API).
+    Sin dependencias: ni dominio ni infraestructura. El agente solo conoce este proyecto.
+  -->
+
+</Project>

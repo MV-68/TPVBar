@@ -1,0 +1,276 @@
+@page "/productos"
+@attribute [Authorize(Policy = Policies.ManageCatalog)]
+@using Microsoft.AspNetCore.Authorization
+@using TPVBar.Application.Features.Catalog
+@using TPVBar.Domain.Catalog
+@inject UseCaseRunner Runner
+
+<PageTitle>Productos · TPVBar</PageTitle>
+
+<main class="page page--wide">
+    <h1>Productos</h1>
+
+    @if (_error is not null)
+    {
+        <p class="alert alert--error" role="alert">@_error</p>
+    }
+    @if (_info is not null)
+    {
+        <p class="alert alert--ok" role="status">@_info</p>
+    }
+
+    <div class="split">
+        <section aria-labelledby="catalogo">
+            <h2 id="catalogo">Catálogo</h2>
+            <button type="button" class="btn btn--primary" @onclick="NewProduct">Nuevo producto</button>
+
+            @if (_products is null)
+            {
+                <p>Cargando…</p>
+            }
+            else
+            {
+                <table class="grid">
+                    <thead>
+                        <tr><th>Producto</th><th>Categoría</th><th class="num">Precio</th><th>IVA</th><th>Destino</th><th class="num">Stock</th><th>Estado</th><th><span class="sr-only">Acciones</span></th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var p in _products)
+                        {
+                            <tr class="@(p.IsActive ? "" : "row--inactive")">
+                                <td>@p.Name @if (!string.IsNullOrEmpty(p.Sku)) { <small>(@p.Sku)</small> }</td>
+                                <td>@p.CategoryName</td>
+                                <td class="num">@p.SalePrice.ToString("C")</td>
+                                <td>@p.TaxRateName</td>
+                                <td>@(p.Station == PreparationStation.Bar ? "Barra" : "Cocina")</td>
+                                <td class="num">@(p.StockControlled ? $"{p.StockQuantity:0.###} {p.StockUnit}" : "—")</td>
+                                <td>@(p.IsActive ? "Activo" : "Inactivo")</td>
+                                <td class="actions">
+                                    <button type="button" class="btn btn--small" @onclick="() => EditProduct(p)">Editar</button>
+                                    <button type="button" class="btn btn--small" @onclick="() => ToggleProductAsync(p)">@(p.IsActive ? "Desactivar" : "Activar")</button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+
+            <h2>Categorías</h2>
+            <ul class="plain">
+                @foreach (var c in _categories ?? [])
+                {
+                    <li>
+                        @c.Name @if (!c.IsActive) { <em>(inactiva)</em> }
+                        <button type="button" class="btn btn--small" @onclick="() => EditCategory(c)">Editar</button>
+                    </li>
+                }
+            </ul>
+            <button type="button" class="btn" @onclick="NewCategory">Nueva categoría</button>
+        </section>
+
+        @if (_productForm is not null)
+        {
+            <section class="panel" aria-labelledby="form-producto">
+                <h2 id="form-producto">@(_productForm.Id is null ? "Nuevo producto" : "Editar producto")</h2>
+                <form @onsubmit="SaveProductAsync">
+                    <label>Nombre <input type="text" maxlength="120" required @bind="_productForm.Name" /></label>
+                    <label>Categoría
+                        <select @bind="_productForm.CategoryId">
+                            <option value="0">— elegir —</option>
+                            @foreach (var c in _categories ?? []) { <option value="@c.Id">@c.Name</option> }
+                        </select>
+                    </label>
+                    <label>Precio de venta (IVA incluido, €)
+                        <input type="number" step="0.01" min="0" required @bind="_productForm.Price" />
+                    </label>
+                    <label>Tipo impositivo
+                        <select @bind="_productForm.TaxRateId">
+                            <option value="0">— elegir —</option>
+                            @foreach (var t in _rates ?? []) { <option value="@t.Id">@t.Name (@t.Rate.ToString("0.##") %)@(t.IsValidToday ? "" : " · no vigente")</option> }
+                        </select>
+                    </label>
+                    <label>Destino de preparación
+                        <select @bind="_productForm.Station">
+                            <option value="@PreparationStation.Kitchen">Cocina</option>
+                            <option value="@PreparationStation.Bar">Barra</option>
+                        </select>
+                    </label>
+                    <label>Código / PLU (opcional) <input type="text" maxlength="40" @bind="_productForm.Sku" /></label>
+                    <label>Descripción (opcional) <input type="text" maxlength="500" @bind="_productForm.Description" /></label>
+                    <label>Orden de visualización <input type="number" @bind="_productForm.DisplayOrder" /></label>
+                    <label class="check"><input type="checkbox" @bind="_productForm.StockControlled" /> Controlar el stock (por unidades)</label>
+                    @if (_productForm.StockControlled)
+                    {
+                        <label>Stock mínimo (aviso de reposición) <input type="number" step="0.001" min="0" @bind="_productForm.StockMinimum" /></label>
+                        <label>Unidad <input type="text" maxlength="20" @bind="_productForm.StockUnit" placeholder="unidad" /></label>
+                        <p class="muted">Las existencias se gestionan en <a href="/almacen">Almacén</a> (entradas, salidas y ajustes).</p>
+                    }
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn--primary" disabled="@_busy">Guardar</button>
+                        <button type="button" class="btn" @onclick="() => _productForm = null">Cancelar</button>
+                    </div>
+                </form>
+            </section>
+        }
+
+        @if (_categoryForm is not null)
+        {
+            <section class="panel" aria-labelledby="form-categoria">
+                <h2 id="form-categoria">@(_categoryForm.Id is null ? "Nueva categoría" : "Editar categoría")</h2>
+                <form @onsubmit="SaveCategoryAsync">
+                    <label>Nombre <input type="text" maxlength="80" required @bind="_categoryForm.Name" /></label>
+                    <label>Orden <input type="number" @bind="_categoryForm.DisplayOrder" /></label>
+                    <label class="check"><input type="checkbox" @bind="_categoryForm.IsActive" /> Activa</label>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn--primary" disabled="@_busy">Guardar</button>
+                        <button type="button" class="btn" @onclick="() => _categoryForm = null">Cancelar</button>
+                    </div>
+                </form>
+            </section>
+        }
+    </div>
+</main>
+
+@code {
+    private IReadOnlyList<ProductRow>? _products;
+    private IReadOnlyList<CategoryRow>? _categories;
+    private IReadOnlyList<TaxRateRow>? _rates;
+    private ProductForm? _productForm;
+    private CategoryForm? _categoryForm;
+    private string? _error;
+    private string? _info;
+    private bool _busy;
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var products = await Runner.RunAsync<CatalogService, IReadOnlyList<ProductRow>>((s, ct) => s.ListProductsAsync(ct));
+        var categories = await Runner.RunAsync<CatalogService, IReadOnlyList<CategoryRow>>((s, ct) => s.ListCategoriesAsync(ct));
+        var rates = await Runner.RunAsync<CatalogService, IReadOnlyList<TaxRateRow>>((s, ct) => s.ListTaxRatesAsync(ct));
+        _products = products.Value;
+        _categories = categories.Value;
+        _rates = rates.Value;
+        _error = products.Error ?? categories.Error ?? rates.Error;
+    }
+
+    private void NewProduct()
+    {
+        _categoryForm = null;
+        _productForm = new ProductForm { DisplayOrder = (_products?.Count ?? 0) + 1 };
+    }
+
+    private void EditProduct(ProductRow p)
+    {
+        _categoryForm = null;
+        _productForm = new ProductForm
+        {
+            Id = p.Id, Name = p.Name, CategoryId = p.CategoryId, TaxRateId = p.TaxRateId, Price = p.SalePrice,
+            Station = p.Station, Sku = p.Sku, Description = p.Description, DisplayOrder = p.DisplayOrder,
+            StockControlled = p.StockControlled, StockMinimum = p.StockMinimum, StockUnit = p.StockUnit,
+        };
+    }
+
+    private async Task SaveProductAsync()
+    {
+        if (_productForm is not { } form || _busy)
+        {
+            return;
+        }
+
+        _busy = true;
+        _info = null;
+        try
+        {
+            var input = new ProductInput(form.CategoryId, form.TaxRateId, form.Name ?? string.Empty, form.Price, form.Station, form.Sku, form.Description, form.DisplayOrder, form.StockControlled, form.StockMinimum, form.StockUnit);
+            var result = form.Id is { } id
+                ? await Runner.RunAsync<CatalogService>((s, ct) => s.UpdateProductAsync(id, input, ct))
+                : await Runner.RunAsync<CatalogService>((s, ct) => s.CreateProductAsync(input, ct));
+
+            _error = result.Error;
+            if (result.Ok)
+            {
+                _info = "Producto guardado.";
+                _productForm = null;
+                await LoadAsync();
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ToggleProductAsync(ProductRow p)
+    {
+        var result = await Runner.RunAsync<CatalogService>((s, ct) => s.SetProductActiveAsync(p.Id, !p.IsActive, ct));
+        _error = result.Error;
+        await LoadAsync();
+    }
+
+    private void NewCategory()
+    {
+        _productForm = null;
+        _categoryForm = new CategoryForm { DisplayOrder = (_categories?.Count ?? 0) + 1, IsActive = true };
+    }
+
+    private void EditCategory(CategoryRow c)
+    {
+        _productForm = null;
+        _categoryForm = new CategoryForm { Id = c.Id, Name = c.Name, DisplayOrder = c.DisplayOrder, IsActive = c.IsActive };
+    }
+
+    private async Task SaveCategoryAsync()
+    {
+        if (_categoryForm is not { } form || _busy)
+        {
+            return;
+        }
+
+        _busy = true;
+        _info = null;
+        try
+        {
+            var name = form.Name ?? string.Empty;
+            var result = form.Id is { } id
+                ? await Runner.RunAsync<CatalogService>((s, ct) => s.UpdateCategoryAsync(id, name, form.DisplayOrder, form.IsActive, ct))
+                : await Runner.RunAsync<CatalogService>((s, ct) => s.CreateCategoryAsync(name, form.DisplayOrder, ct));
+
+            _error = result.Error;
+            if (result.Ok)
+            {
+                _info = "Categoría guardada.";
+                _categoryForm = null;
+                await LoadAsync();
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private sealed class ProductForm
+    {
+        public int? Id { get; set; }
+        public string? Name { get; set; }
+        public int CategoryId { get; set; }
+        public int TaxRateId { get; set; }
+        public decimal Price { get; set; }
+        public PreparationStation Station { get; set; } = PreparationStation.Kitchen;
+        public string? Sku { get; set; }
+        public string? Description { get; set; }
+        public int DisplayOrder { get; set; }
+        public bool StockControlled { get; set; }
+        public decimal StockMinimum { get; set; }
+        public string? StockUnit { get; set; } = "unidad";
+    }
+
+    private sealed class CategoryForm
+    {
+        public int? Id { get; set; }
+        public string? Name { get; set; }
+        public int DisplayOrder { get; set; }
+        public bool IsActive { get; set; }
+    }
+}

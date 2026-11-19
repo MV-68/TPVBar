@@ -1,0 +1,34 @@
+﻿@page "/"
+
+<PageTitle>TPVBar</PageTitle>
+
+<main class="phase-status">
+    <h1>TPVBar</h1>
+    <p class="phase-status__lead">Punto de venta para bar · versión @AppVersion</p>
+
+    <AuthorizeView>
+        <Authorized>
+            <p>
+                Sesión iniciada como <strong>@context.User.FindFirst(TpvClaimTypes.DisplayName)?.Value</strong>
+                (@string.Join(", ", context.User.FindAll(System.Security.Claims.ClaimTypes.Role).Select(c => c.Value))).
+            </p>
+        </Authorized>
+    </AuthorizeView>
+
+    <section aria-labelledby="estado-titulo">
+        <h2 id="estado-titulo">Estado del desarrollo</h2>
+        <p>
+            <strong>Versión candidata, pendiente de validación.</strong> Mesas, comandas, cocina, caja, almacén y estadísticas están
+            implementados; falta probarlo con el hardware real y resolver la revisión fiscal.
+        </p>
+        <p>
+            Los justificantes de pago <strong>no son facturas</strong>. Las facturas se emiten desde «Cobro»; su envío a la AEAT <strong>no se ha probado contra la AEAT</strong> y
+            TPVBar <strong>no es todavía un sistema de facturación</strong> validado fiscalmente.
+        </p>
+    </section>
+</main>
+
+@code {
+    private static readonly string AppVersion =
+        typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "desconocida";
+}

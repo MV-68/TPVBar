@@ -1,0 +1,326 @@
+@page "/configuracion/facturacion"
+@attribute [Authorize(Policy = Policies.ManageConfiguration)]
+@using Microsoft.AspNetCore.Authorization
+@using TPVBar.Application.Features.Invoicing
+@inject UseCaseRunner Runner
+
+<PageTitle>Facturación · TPVBar</PageTitle>
+
+<main class="page">
+    <h1>Facturación</h1>
+
+    <p class="alert" role="note">
+        <strong>Estado:</strong> TPVBar numera las facturas, genera su registro de facturación encadenado (huella SHA-256) y el QR de cotejo, y puede enviar los
+        registros a la AEAT (VERI*FACTU), pero <strong>ese envío no se ha probado contra la AEAT</strong> y la huella no se ha contrastado con los ejemplos oficiales.
+        No está declarado apto fiscalmente: valídelo con su asesor antes de usarlo para facturar a clientes (<code>docs/legal/revision-fiscal-y-legal.md</code>).
+    </p>
+
+    @if (_error is not null) { <p class="alert alert--error" role="alert">@_error</p> }
+    @if (_info is not null) { <p class="alert alert--ok" role="status">@_info</p> }
+
+    <section class="panel" aria-labelledby="emisor">
+        <h2 id="emisor">Datos del emisor</h2>
+        <p class="muted">Aparecen en todas las facturas nuevas. Las ya emitidas conservan los datos que tenían. Sin ellos no se puede emitir.</p>
+        <form @onsubmit="SaveAsync">
+            <label>Nombre o razón social <input type="text" maxlength="120" required @bind="_name" /></label>
+            <label>NIF <input type="text" maxlength="12" required @bind="_nif" /></label>
+            <label>Domicilio <input type="text" maxlength="250" required @bind="_address" /></label>
+            <label>Importe máximo de la factura simplificada (€, IVA incluido)
+                <input type="number" step="0.01" min="0.01" required @bind="_limit" />
+            </label>
+            <p class="muted">Por defecto 400 €. Por encima hay que emitir factura completa con los datos del cliente. Confirme el límite aplicable a su actividad con el asesor.</p>
+            <button type="submit" class="btn btn--primary" disabled="@_busy">Guardar</button>
+        </form>
+    </section>
+
+    <section class="panel" aria-labelledby="cadena">
+        <h2 id="cadena">Registros de facturación</h2>
+        @if (_overview is not null)
+        {
+            <dl class="totals">
+                <div><dt>Registros generados</dt><dd>@_overview.Records</dd></div>
+                <div><dt>Pendientes de envío a la AEAT</dt><dd>@_overview.Pending</dd></div>
+                <div><dt>Datos del emisor completos</dt><dd>@(_overview.IssuerComplete ? "Sí" : "No")</dd></div>
+            </dl>
+        }
+        <p class="muted">Comprobar la cadena recalcula todas las huellas y detecta registros alterados, eliminados o reordenados.</p>
+        <button type="button" class="btn" disabled="@_busy" @onclick="VerifyAsync">Comprobar integridad de la cadena</button>
+        @if (_verification is not null)
+        {
+            @if (_verification.Ok)
+            {
+                <p class="alert alert--ok" role="status">Cadena íntegra: @_verification.Records registros comprobados.</p>
+            }
+            else
+            {
+                <p class="alert alert--error" role="alert">
+                    ¡Cadena NO íntegra! Fallo en el registro @_verification.BrokenAtSequence: @_verification.Problem
+                    Conserve una copia de la base de datos y avise a su asesor o soporte.
+                </p>
+            }
+        }
+    </section>
+
+    <section class="panel" aria-labelledby="sistema">
+        <h2 id="sistema">Sistema informático (declaración responsable)</h2>
+        <p class="muted">
+            Datos del <strong>productor</strong> del software, que se declaran en cada registro y deben coincidir con su declaración responsable. Sin ellos no se envía nada.
+            Número de instalación: <code>@(string.IsNullOrEmpty(_installation) ? "se genera al guardar" : _installation)</code>.
+        </p>
+        <form @onsubmit="SaveSystemAsync">
+            <label>Nombre o razón social del productor <input type="text" maxlength="120" required @bind="_producerName" /></label>
+            <label>NIF del productor <input type="text" maxlength="12" required @bind="_producerNif" /></label>
+            <label>Identificador del sistema (1-2 caracteres) <input type="text" maxlength="2" required @bind="_systemId" /></label>
+            <button type="submit" class="btn btn--primary" disabled="@_busy">Guardar</button>
+        </form>
+    </section>
+
+    <section class="panel" aria-labelledby="envio">
+        <h2 id="envio">Envío a la AEAT</h2>
+        @if (_submission is not null)
+        {
+            <p class="alert @(_submission.Mode == AeatMode.Production ? "alert--error" : "")" role="note">
+                Modo: <strong>@ModeText(_submission.Mode)</strong>.
+                @if (_submission.Mode == AeatMode.Disabled) { <text>No se envía nada. Se activa en la configuración del servidor (<code>Billing:Aeat:Mode</code>), con el certificado; vea <code>docs/operations/facturacion.md</code>.</text> }
+                @if (_submission.Mode == AeatMode.PreProduction) { <text>Entorno de pruebas de la AEAT: sin efecto fiscal.</text> }
+                @if (_submission.Mode == AeatMode.Production) { <text><strong>Los envíos tienen efecto fiscal real.</strong></text> }
+            </p>
+            @if (_submission.ConfigurationProblem is not null) { <p class="alert alert--error" role="alert">Configuración: @_submission.ConfigurationProblem</p> }
+            @if (!_submission.SystemInfoComplete) { <p class="alert" role="alert">Faltan los datos del productor (arriba): hasta completarlos no se enviará nada.</p> }
+            <dl class="totals">
+                <div><dt>Pendientes de envío</dt><dd>@_submission.Pending</dd></div>
+                <div><dt>Aceptados por la AEAT</dt><dd>@_submission.Accepted</dd></div>
+                <div><dt>Aceptados con errores</dt><dd>@_submission.AcceptedWithErrors</dd></div>
+                <div><dt>Rechazados (la cola se detiene)</dt><dd>@_submission.Rejected</dd></div>
+                <div><dt>Último intento</dt><dd>@(_submission.LastAttemptAt is { } at ? BusinessTime.ToLocal(at).ToString("dd/MM/yyyy HH:mm:ss") : "—")</dd></div>
+            </dl>
+            @if (_submission.LastMessage is not null) { <p class="muted">Último mensaje: @_submission.LastMessage</p> }
+            @if (_runInfo is not null) { <p class="alert alert--ok" role="status">@_runInfo</p> }
+            <button type="button" class="btn" disabled="@(_busy || _submission.Mode == AeatMode.Disabled)" @onclick="SendNowAsync">Enviar ahora</button>
+
+            @if (_attention is { Count: > 0 })
+            {
+                <h3>Registros que requieren atención</h3>
+                <table class="grid grid--compact">
+                    <caption class="sr-only">Registros rechazados, con errores o con fallo de envío</caption>
+                    <thead><tr><th scope="col">Nº</th><th scope="col">Factura</th><th scope="col">Tipo</th><th scope="col">Estado</th><th scope="col">Intentos</th><th scope="col">Mensaje</th><th scope="col"></th></tr></thead>
+                    <tbody>
+                        @foreach (var r in _attention)
+                        {
+                            var seq = r.Sequence;
+                            <tr>
+                                <td>@r.Sequence</td><td>@r.InvoiceNumber</td><td>@r.Type</td><td>@r.Status</td><td class="num">@r.Attempts</td>
+                                <td>@(r.ErrorCode is { } c ? $"[{c}] " : "")@r.Message</td>
+                                <td class="nowrap">
+                                    @if (r.Status == "Rejected") { <button type="button" class="btn btn--small" disabled="@_busy" @onclick="() => RequeueAsync(seq)">Reintentar</button> }
+                                    @if (r.Status is "Rejected" or "AcceptedWithErrors") { <button type="button" class="btn btn--small" disabled="@_busy" @onclick="() => CorrectAsync(seq)">@(r.Status == "Rejected" ? "Reenviar corregido" : "Subsanar")</button> }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+                <p class="muted">Un rechazo detiene la cola para no romper la cadena. Revise el motivo con su asesor. <strong>Reintentar</strong> reenvía el mismo registro (basta si la causa era de configuración o estaba en la AEAT). <strong>Reenviar corregido / Subsanar</strong> genera un registro nuevo para la misma factura (nueva fecha-hora y huella, marcado como subsanación) y deja el original como «Sustituido»; úselo cuando la causa estaba en los datos del registro. Un registro nunca se modifica ni se borra.</p>
+            }
+        }
+    </section>
+
+    <p><a class="btn" href="/facturas">Ver facturas</a></p>
+</main>
+
+@code {
+    private string _name = string.Empty;
+    private string _nif = string.Empty;
+    private string _address = string.Empty;
+    private decimal _limit = InvoiceSettings.DefaultSimplifiedLimit;
+    private string _producerName = string.Empty;
+    private string _producerNif = string.Empty;
+    private string _systemId = BillingSubmissionService.DefaultSystemId;
+    private string _installation = string.Empty;
+    private SubmissionOverview? _submission;
+    private IReadOnlyList<SubmissionRow>? _attention;
+    private string? _runInfo;
+    private BillingOverview? _overview;
+    private ChainVerification? _verification;
+    private string? _error;
+    private string? _info;
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var settings = await Runner.RunAsync<InvoiceService, InvoiceSettings>((s, ct) => s.GetSettingsAsync(ct));
+        _error = settings.Error;
+        if (settings.Ok)
+        {
+            _name = settings.Value!.IssuerName;
+            _nif = settings.Value.IssuerNif;
+            _address = settings.Value.IssuerAddress;
+            _limit = settings.Value.SimplifiedLimit;
+        }
+
+        var system = await Runner.RunAsync<BillingSubmissionService, BillingSystemInfo>((s, ct) => s.GetSystemInfoAsync(ct));
+        if (system.Ok)
+        {
+            _producerName = system.Value!.ProducerName;
+            _producerNif = system.Value.ProducerNif;
+            _systemId = system.Value.SystemId;
+            _installation = system.Value.InstallationNumber;
+        }
+
+        await LoadOverviewAsync();
+    }
+
+    private async Task LoadOverviewAsync()
+    {
+        var overview = await Runner.RunAsync<InvoiceService, BillingOverview>((s, ct) => s.GetOverviewAsync(ct));
+        if (overview.Ok)
+        {
+            _overview = overview.Value;
+        }
+
+        var submission = await Runner.RunAsync<BillingSubmissionService, SubmissionOverview>((s, ct) => s.GetOverviewAsync(ct));
+        var attention = await Runner.RunAsync<BillingSubmissionService, IReadOnlyList<SubmissionRow>>((s, ct) => s.ListAsync(true, ct));
+        _submission = submission.Ok ? submission.Value : null;
+        _attention = attention.Ok ? attention.Value : null;
+    }
+
+    private async Task SaveSystemAsync()
+    {
+        _busy = true;
+        _error = null;
+        _info = null;
+        try
+        {
+            var (name, nif, id) = (_producerName, _producerNif, _systemId);
+            var result = await Runner.RunAsync<BillingSubmissionService, bool>(async (s, ct) =>
+            {
+                await s.SaveSystemInfoAsync(name, nif, id, ct);
+                return true;
+            });
+            _error = result.Error;
+            if (result.Ok)
+            {
+                _info = "Datos del sistema informático guardados (quedan auditados).";
+                var system = await Runner.RunAsync<BillingSubmissionService, BillingSystemInfo>((s, ct) => s.GetSystemInfoAsync(ct));
+                _installation = system.Ok ? system.Value!.InstallationNumber : _installation;
+                await LoadOverviewAsync();
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task SendNowAsync()
+    {
+        _busy = true;
+        _error = null;
+        _runInfo = null;
+        try
+        {
+            var result = await Runner.RunAsync<BillingSubmissionService, SubmissionRunResult>((s, ct) => s.SendNowAsync(ct));
+            _error = result.Error;
+            if (result.Ok)
+            {
+                var r = result.Value!;
+                _runInfo = r.Skipped ?? $"{r.Attempted} registros enviados: {r.Accepted} aceptados, {r.AcceptedWithErrors} con errores, {r.Rejected} rechazados, {r.Failed} con fallo.";
+                await LoadOverviewAsync();
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task CorrectAsync(long sequence)
+    {
+        _busy = true;
+        _error = null;
+        _runInfo = null;
+        try
+        {
+            var key = Guid.NewGuid();
+            var result = await Runner.RunAsync<BillingSubmissionService, long>((s, ct) => s.CorrectAsync(sequence, key, ct));
+            _error = result.Error;
+            if (result.Ok)
+            {
+                _runInfo = $"Se generó el registro {result.Value} que sustituye al {sequence}. Se enviará con «Enviar ahora» o en el próximo ciclo.";
+                await LoadOverviewAsync();
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task RequeueAsync(long sequence)
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            var result = await Runner.RunAsync<BillingSubmissionService, bool>(async (s, ct) =>
+            {
+                await s.RequeueAsync(sequence, ct);
+                return true;
+            });
+            _error = result.Error;
+            await LoadOverviewAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static string ModeText(AeatMode mode) => mode switch
+    {
+        AeatMode.Disabled => "desactivado",
+        AeatMode.PreProduction => "pruebas (preproducción)",
+        _ => "PRODUCCIÓN",
+    };
+
+    private async Task SaveAsync()
+    {
+        _busy = true;
+        _error = null;
+        _info = null;
+        try
+        {
+            var (name, nif, address, limit) = (_name, _nif, _address, _limit);
+            var result = await Runner.RunAsync<InvoiceService, bool>(async (s, ct) =>
+            {
+                await s.SaveSettingsAsync(name, nif, address, limit, ct);
+                return true;
+            });
+            _error = result.Error;
+            if (result.Ok)
+            {
+                _info = "Datos de facturación guardados (quedan auditados).";
+                await LoadOverviewAsync();
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task VerifyAsync()
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            var result = await Runner.RunAsync<InvoiceService, ChainVerification>((s, ct) => s.VerifyChainAsync(ct));
+            _error = result.Error;
+            _verification = result.Ok ? result.Value : null;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

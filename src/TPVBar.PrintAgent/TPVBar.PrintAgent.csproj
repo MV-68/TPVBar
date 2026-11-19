@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <!--
+    Agente de impresión local. Se ejecuta como servicio de Windows. Solo conoce el contrato público
+    (TPVBar.PrintContracts): habla con el servidor por HTTP autenticado y NO accede a la base de datos.
+  -->
+  <PropertyGroup>
+    <UserSecretsId>dotnet-TPVBar.PrintAgent-ff5fb38c-cc41-4f07-b52c-97390c2eae72</UserSecretsId>
+    <!-- Necesario para la interoperabilidad con la cola de impresión de Windows (winspool). -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TPVBar.PrintContracts\TPVBar.PrintContracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" />
+    <PackageReference Include="Microsoft.Extensions.Http" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="TPVBar.Integration.Tests" />
+  </ItemGroup>
+
+</Project>
