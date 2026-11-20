@@ -16,7 +16,10 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-db.ps1
 
 Qué hace (es idempotente):
 
-- Crea un clúster propio en `.pgdata` (puerto **5433**, solo `localhost`, autenticación `scram-sha-256`) y lo arranca desacoplado.
+- Crea un clúster propio en `.pgdata` (puerto **5434**, solo `localhost`, autenticación `scram-sha-256`) y lo arranca desacoplado.
+  Si ya estaba en marcha en otro puerto (antes era 5433), lo reinicia en el nuevo. Si otro programa ocupa el puerto, se detiene
+  con un mensaje: en este equipo el servicio `miFactura-PostgreSQL` (otra aplicación) usa el 5433 y arranca con Windows.
+  Para usar otro puerto: `scripts\dev-db.ps1 -Port <puerto>` (actualiza los User Secrets).
 - Crea el rol `tpvbar_app` y las bases `tpvbar` (desarrollo) y `tpvbar_test` (pruebas; se **borra y recrea** en cada ejecución de pruebas).
 - Genera contraseñas aleatorias. Se guardan en `.pgdata\dev-credentials.json` (ignorado por Git) y como **User Secrets** de `TPVBar.Web`:
   `ConnectionStrings:TpvBar`, `ConnectionStrings:TpvBarTest` y `Seed:DevUserPassword`.
@@ -34,8 +37,8 @@ Parar el servidor:
 dotnet run --project src/TPVBar.Web --launch-profile http
 ```
 
-En **Desarrollo** la aplicación aplica las migraciones, asegura los roles iniciales y crea cinco usuarios de prueba
-(`dev.admin`, `dev.encargado`, `dev.camarero`, `dev.cocina`, `dev.caja`). Su contraseña es `Seed:DevUserPassword`:
+En **Desarrollo** la aplicación aplica las migraciones, asegura los roles iniciales y crea seis usuarios de prueba
+(`dev.admin`, `dev.encargado`, `dev.camarero`, `dev.cocina`, `dev.caja`, `dev.comandero`). Su contraseña es `Seed:DevUserPassword`:
 
 ```powershell
 dotnet user-secrets list --project src/TPVBar.Web
@@ -70,3 +73,20 @@ dotnet run --project src/TPVBar.Web -- --create-admin <usuario>
 
 Pide la contraseña por consola sin mostrarla, o la toma de la variable de entorno `TPVBAR_ADMIN_PASSWORD`.
 Se aplica la política de contraseñas (mínimo 10 caracteres, sin el nombre de usuario).
+
+## 6. Crear otros usuarios (también válido fuera de desarrollo)
+
+```powershell
+dotnet run --project src/TPVBar.Web -- --create-user ana --role Comandero --name "Ana"
+```
+
+Roles: `Administrador`, `Encargado`, `Camarero`, `Cocina`, `Caja` y `Comandero` (solo toma comandas, pensado para móviles:
+no cobra, no anula líneas enviadas ni reabre mesas). `--name` es el nombre que se ve en pantalla (por defecto, el usuario).
+La contraseña se pide por consola sin mostrarla, o se toma de la variable de entorno `TPVBAR_USER_PASSWORD`.
+
+En el **servidor de producción**, desde PowerShell como Administrador (necesita leer la configuración protegida):
+
+```powershell
+$env:TPVBAR_CONFIG_FILE = 'C:\ProgramData\TPVBar\config\secrets.json'; $env:ASPNETCORE_ENVIRONMENT = 'Production'
+dotnet C:\TPVBar\app\TPVBar.Web.dll --create-user ana --role Comandero --name "Ana"
+```

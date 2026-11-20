@@ -51,7 +51,7 @@ dotnet run --project $webProject --no-launch-profile -- --seed-demo
 if ($LASTEXITCODE -ne 0) { throw 'La carga de datos demo ha fallado.' }
 
 Write-Host ''
-Write-Host "Usuarios: dev.admin, dev.encargado, dev.camarero, dev.cocina, dev.caja"
+Write-Host "Usuarios: dev.admin, dev.encargado, dev.camarero, dev.cocina, dev.caja, dev.comandero"
 Write-Host "Contraseña: dotnet user-secrets list --project src\TPVBar.Web   (clave Seed:DevUserPassword)"
 if ($NoRun) { return }
 

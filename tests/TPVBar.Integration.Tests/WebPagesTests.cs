@@ -125,6 +125,33 @@ public sealed partial class WebPagesTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task Comandero_TomaComandasPeroNoCobra()
+    {
+        var world = await SalesHelpers.CreateWorldAsync(fixture.Web.Services);
+        var orderId = await SalesHelpers.RunAsync<FloorService, long>(
+            fixture.Web.Services, SalesHelpers.Waiter, f => f.OpenTableAsync(world.TableId, 2, Ct));
+        using var client = await LoginAsync(DefaultRoles.OrderTaker);
+
+        var comanda = await client.GetAsync($"/comanda/{orderId}", Ct);
+        var html = WebUtility.HtmlDecode(await comanda.Content.ReadAsStringAsync(Ct));
+        Assert.Equal(HttpStatusCode.OK, comanda.StatusCode);
+        Assert.Contains("Enviar a cocina", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("/cobro/", html, StringComparison.Ordinal);
+
+        var menu = await client.GetStringAsync("/", Ct);
+        Assert.Contains("href=\"mesas\"", menu, StringComparison.Ordinal);
+        Assert.DoesNotContain("href=\"caja\"", menu, StringComparison.Ordinal);
+
+        foreach (var path in new[] { $"/cobro/{orderId}", "/caja", "/productos" })
+        {
+            var response = await client.GetAsync(path, Ct);
+
+            Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+            Assert.StartsWith("/acceso-denegado", LocationOf(response), StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public async Task Navegacion_SoloMuestraLoQueElRolPuedeUsar()
     {
         using var camarero = await LoginAsync(DefaultRoles.Waiter);

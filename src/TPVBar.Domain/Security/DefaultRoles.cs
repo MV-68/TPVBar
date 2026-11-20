@@ -14,7 +14,13 @@ public static class DefaultRoles
     public const string Kitchen = "Cocina";
     public const string Cashier = "Caja";
 
-    public static IReadOnlyList<string> Names { get; } = [Administrator, Manager, Waiter, Kitchen, Cashier];
+    /// <summary>
+    /// Solo toma comandas (pensado para móviles): abre mesas, añade líneas, las envía a cocina o barra y pide la cuenta.
+    /// No cobra, no anula líneas enviadas ni reabre mesas.
+    /// </summary>
+    public const string OrderTaker = "Comandero";
+
+    public static IReadOnlyList<string> Names { get; } = [Administrator, Manager, Waiter, Kitchen, Cashier, OrderTaker];
 
     public static FrozenDictionary<string, IReadOnlyList<Permission>> Permissions { get; } =
         new Dictionary<string, IReadOnlyList<Permission>>
@@ -30,5 +36,6 @@ public static class DefaultRoles
             [Waiter] = [Permission.TakeOrders, Permission.TakePayments],
             [Kitchen] = [Permission.UseKitchen],
             [Cashier] = [Permission.OpenCloseCash, Permission.PerformRefunds, Permission.TakeOrders, Permission.TakePayments, Permission.IssueInvoices],
+            [OrderTaker] = [Permission.TakeOrders],
         }.ToFrozenDictionary();
 }

@@ -17,6 +17,7 @@ internal static partial class DevelopmentDataSeeder
         ("dev.camarero", "Camarero (prueba)", DefaultRoles.Waiter),
         ("dev.cocina", "Cocina (prueba)", DefaultRoles.Kitchen),
         ("dev.caja", "Caja (prueba)", DefaultRoles.Cashier),
+        ("dev.comandero", "Comandero (prueba)", DefaultRoles.OrderTaker),
     ];
 
     public static async Task SeedAsync(

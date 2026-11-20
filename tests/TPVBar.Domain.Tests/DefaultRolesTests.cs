@@ -31,6 +31,10 @@ public class DefaultRolesTests
     }
 
     [Fact]
+    public void Comandero_SoloTomaComandas() =>
+        Assert.Equal([Permission.TakeOrders], DefaultRoles.Permissions[DefaultRoles.OrderTaker]);
+
+    [Fact]
     public void SoloElAdministradorGestionaUsuarios()
     {
         var conPermiso = DefaultRoles.Names

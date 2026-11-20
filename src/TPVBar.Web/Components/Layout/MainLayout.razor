@@ -5,14 +5,17 @@
     <NavMenu />
     <AuthorizeView>
         <Authorized>
-            <StockChip />
-            <CashStatusChip />
-            <PrintStatusChip />
-            <span class="topbar__user">@context.User.FindFirst(TpvClaimTypes.DisplayName)?.Value</span>
-            <form method="post" action="/auth/logout" class="topbar__logout">
-                <AntiforgeryToken />
-                <button type="submit" class="btn btn--light">Cerrar sesión</button>
-            </form>
+            @* Avisos, usuario y «Cerrar sesión» van juntos: si la barra no cabe en una fila, bajan en bloque (ver app.css). *@
+            <div class="topbar__end">
+                <StockChip />
+                <CashStatusChip />
+                <PrintStatusChip />
+                <span class="topbar__user">@context.User.FindFirst(TpvClaimTypes.DisplayName)?.Value</span>
+                <form method="post" action="/auth/logout" class="topbar__logout">
+                    <AntiforgeryToken />
+                    <button type="submit" class="btn btn--light">Cerrar sesión</button>
+                </form>
+            </div>
         </Authorized>
     </AuthorizeView>
 </header>

@@ -4,6 +4,16 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). V
 
 ## [Sin publicar]
 
+### Cambiado (desarrollo)
+- El PostgreSQL de desarrollo pasa del puerto **5433 al 5434**: el 5433 lo usa el servicio `miFactura-PostgreSQL` de otra aplicación, que arranca con Windows, y TPVBar acababa conectándose a él (fallo de contraseña de `tpvbar_app`). `scripts\dev-db.ps1` reinicia el clúster si estaba en otro puerto, mantiene el puerto de `dev-credentials.json` (lo usa `demo.ps1`) y se detiene si el puerto está ocupado por otro programa (D-071).
+
+### Añadido (rol Comandero)
+- **Rol «Comandero»** con un único permiso, tomar comandas (`TakeOrders`), pensado para móviles: ve solo «Mesas», abre mesas, añade líneas, envía a cocina/barra y pide la cuenta; **no cobra**, no anula líneas enviadas ni reabre mesas. Se crea solo al arrancar, también en bases de datos existentes.
+- Comando `TPVBar.Web --create-user <usuario> --role <rol> [--name "<nombre visible>"]` (contraseña por consola o `TPVBAR_USER_PASSWORD`) para dar de alta usuarios de cualquier rol. Usuario de prueba `dev.comandero` en desarrollo.
+- **Barra superior en móviles** (menos de 700 px de ancho): marca, usuario y «Cerrar sesión» arriba; el menú en su propia fila, que se desplaza en horizontal si no cabe; los avisos debajo. Ya no se sale de la pantalla.
+- **Barra superior en tablet y escritorio:** si no cabe en una fila, ya no se aprieta (enlaces apilados en vertical, avisos partidos); los avisos, el usuario y «Cerrar sesión» bajan juntos a una segunda fila. Con menú largo (encargado, administrador) el menú ocupa su propia fila a todo el ancho: en tablet la barra del administrador pasa de unos 670 a 256 px de alto. Avisos, usuario y «Cerrar sesión» quedan agrupados en `MainLayout` (`.topbar__end`).
+- **Limitaciones:** la restricción es por usuario, no por dispositivo; se ha comprobado en el navegador con tamaño de móvil (375 px), no en un teléfono real (D-070).
+
 ### Añadido (entorno demo)
 - `scripts\demo.ps1` y comando `TPVBar.Web --seed-demo`: base `tpvbar_demo` con historial ficticio (3 turnos cerrados, devolución, turno abierto con mesas en uso). Solo fuera de producción. Ver [`docs/operations/demo.md`](docs/operations/demo.md).
 

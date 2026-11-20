@@ -148,6 +148,48 @@ h1:focus {
 .nav__link.active { background: rgba(255, 255, 255, 0.22); box-shadow: inset 0 -3px 0 var(--tpv-warning); }
 .nav__link:focus-visible { outline: 3px solid var(--tpv-warning); outline-offset: 2px; }
 .topbar__user { font-weight: 600; }
+/* Avisos + usuario + «Cerrar sesión» (MainLayout). */
+.topbar__end { display: flex; align-items: center; gap: 1rem; }
+
+/* Móvil: la barra no cabe en una fila. Arriba marca, usuario y «Cerrar sesión»; debajo el menú (se desplaza en
+   horizontal si no cabe, sin partir los enlaces) y después los avisos, que pueden ocupar varias líneas.
+   Se mantienen los 48px de alto de los elementos táctiles. El grupo .topbar__end se deshace (display: contents)
+   para poder colocar cada pieza en su fila. */
+@media (max-width: 699px) {
+    .topbar { flex-wrap: wrap; gap: 0.5rem; padding: 0.5rem 0.75rem; }
+    .topbar__end { display: contents; }
+    .topbar__brand { order: 1; margin-right: 0; }
+    .topbar__user {
+        order: 2; flex: 1 1 0; min-width: 0; text-align: right;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .topbar__logout { order: 3; }
+    .topbar__logout .btn { padding: 0 0.75rem; }
+    .topbar .nav {
+        order: 4; flex: 1 0 100%; margin-right: 0;
+        flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin;
+    }
+    .nav__link { flex: 0 0 auto; white-space: nowrap; }
+    .topbar .chip { order: 5; max-width: 100%; min-height: 32px; font-size: 0.85rem; }
+}
+
+/* Tablet y escritorio. Antes, si la barra no cabía, se apretaba: los enlaces del menú se apilaban en vertical y los
+   avisos se partían en varias líneas (con el administrador en tablet llegaba a media pantalla).
+   - Menú corto (camarero, comandero, cocina, caja): una sola fila si cabe; si no, el grupo avisos + usuario +
+     «Cerrar sesión» baja entero a una segunda fila, alineado a la derecha.
+   - Menú largo (5 enlaces o más: encargado, administrador): primera fila con marca, avisos, usuario y «Cerrar sesión»;
+     el menú en una fila propia a todo el ancho, repartido en las líneas que necesite. */
+@media (min-width: 700px) {
+    .topbar { flex-wrap: wrap; row-gap: 0.25rem; padding-top: 0.25rem; padding-bottom: 0.25rem; }
+    .topbar .nav__link, .topbar .chip, .topbar__user { white-space: nowrap; }
+    .topbar__end { margin-left: auto; flex-wrap: wrap; justify-content: flex-end; row-gap: 0.25rem; }
+    .topbar:has(.nav__link:nth-child(5)) .topbar__end { display: contents; }
+    .topbar:has(.nav__link:nth-child(5)) .topbar__brand { order: 1; }
+    .topbar:has(.nav__link:nth-child(5)) .chip { order: 2; white-space: nowrap; }
+    .topbar:has(.nav__link:nth-child(5)) .topbar__user { order: 3; margin-left: auto; }
+    .topbar:has(.nav__link:nth-child(5)) .topbar__logout { order: 4; }
+    .topbar:has(.nav__link:nth-child(5)) .nav { order: 5; flex: 1 0 100%; margin-right: 0; }
+}
 
 /* ===== Páginas y avisos ===== */
 .page { max-width: 72rem; margin: 1.5rem auto; padding: 0 1rem; }

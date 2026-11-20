@@ -21,7 +21,7 @@ catálogo demo y los usuarios de prueba, y ejecuta `TPVBar.Web --seed-demo`.
 ## Qué contiene
 
 - Catálogo demo: 3 zonas, 14 mesas, 6 categorías, 18 productos, existencias y impresoras simuladas.
-- Usuarios `dev.admin`, `dev.encargado`, `dev.camarero`, `dev.cocina`, `dev.caja`; la contraseña es la clave
+- Usuarios `dev.admin`, `dev.encargado`, `dev.camarero`, `dev.cocina`, `dev.caja`, `dev.comandero`; la contraseña es la clave
   `Seed:DevUserPassword` (`dotnet user-secrets list --project src\TPVBar.Web`).
 - Historial: 3 turnos de caja cerrados (~65 comandas pagadas en efectivo y tarjeta), una devolución y un descuadre
   de 0,50 € en el último turno.

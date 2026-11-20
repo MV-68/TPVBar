@@ -326,6 +326,16 @@ Un registro rechazado (o aceptado con errores) no se modifica nunca. «Reenviar 
 **Hipótesis sin confirmar:** la combinación exacta de indicadores sale de los valores del XSD (cuya documentación solo define `RechazoPrevio`) y de mi conocimiento de la especificación; **no se ha contrastado con la AEAT**. Tampoco se sabe cómo valida la AEAT el `RegistroAnterior` cuando un registro anterior fue rechazado y no consta en su sistema: los registros siguientes se encadenan al registro rechazado (orden de generación). Ambas cosas se comprueban en el primer envío de pruebas; si la AEAT las rechaza, hay que ajustar con el documento oficial.
 **Cuándo usar cada botón:** «Reintentar» reenvía el mismo registro (basta si la causa era de configuración —productor, certificado— o estaba en la AEAT). «Reenviar corregido» solo sirve cuando la causa estaba en los datos que entran en la huella (p. ej. un error del formato de `BillingHash`, D-060) o en el contenido del registro; un registro con la huella mal calculada seguirá rechazado por mucho que se reintente.
 
+## Rol Comandero (2026-11-20)
+
+### D-070 · «Solo comandas» se resuelve con un rol, no con el dispositivo
+Para que desde un móvil solo se puedan pedir comandas se añade el rol inicial **Comandero** con el único permiso `TakeOrders`. Las pantallas ya esconden cobrar, anular líneas enviadas y reabrir según los permisos, y los casos de uso los vuelven a comprobar, así que no hace falta código de interfaz nuevo. Conserva «Pedir la cuenta» y «Cancelar comanda» (solo con todas las líneas sin enviar), igual que el camarero.
+**Limitación aceptada:** la restricción depende del usuario que inicia sesión, no del aparato: un camarero con su usuario normal puede cobrar desde un móvil. Restringir por dispositivo (alta de dispositivos y permisos = usuario ∩ dispositivo) queda como alternativa si hace falta; detectar el móvil por el navegador se descarta por poco fiable y falseable.
+**Alta de usuarios:** no hay pantalla de usuarios; se añade `--create-user <usuario> --role <rol>` junto a `--create-admin`, con la misma política de contraseñas y auditoría (`UserAdministrationService`).
+
+### D-071 · PostgreSQL de desarrollo en el puerto 5434
+El servicio `miFactura-PostgreSQL` (otra aplicación, datos en `E:\IA Programas\Facturas\.devdb\data`) escucha ahora en el 5433 de `127.0.0.1` y arranca con Windows. El clúster de TPVBar solo conseguía el 5433 de `::1`, y `localhost` resolvía primero al de miFactura: fallaba la contraseña de `tpvbar_app` y la aplicación no arrancaba. Como en D-008, no se toca el servicio ajeno: TPVBar pasa al **5434**, y `dev-db.ps1` comprueba que el puerto está libre antes de arrancar para que un choque así dé un mensaje claro en lugar de un fallo de contraseña.
+
 ## Cuestiones pendientes (Fase 9)
 1. Confirmar con la AEAT (preproducción) la combinación `Subsanacion`/`RechazoPrevio` y el comportamiento del encadenamiento tras un rechazo.
 2. Si la huella cambia (D-060), definir qué se hace con los registros ya generados con la huella antigua (hoy: subsanar uno a uno).

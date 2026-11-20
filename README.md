@@ -24,7 +24,7 @@ Comprobar el entorno: `dotnet --info`.
 
 ```powershell
 dotnet tool restore
-powershell -ExecutionPolicy Bypass -File scripts\dev-db.ps1   # PostgreSQL de desarrollo (puerto 5433) + secretos
+powershell -ExecutionPolicy Bypass -File scripts\dev-db.ps1   # PostgreSQL de desarrollo (puerto 5434) + secretos
 dotnet restore
 dotnet build
 dotnet test

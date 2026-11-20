@@ -248,6 +248,6 @@ public sealed partial class WebAuthTests(PostgresFixture fixture)
 
         var nombres = await db.Users.AsNoTracking().Where(u => u.NormalizedUserName.StartsWith("DEV.")).Select(u => u.NormalizedUserName).ToListAsync(Ct);
 
-        Assert.Equal(["DEV.ADMIN", "DEV.CAJA", "DEV.CAMARERO", "DEV.COCINA", "DEV.ENCARGADO"], nombres.Order());
+        Assert.Equal(["DEV.ADMIN", "DEV.CAJA", "DEV.CAMARERO", "DEV.COCINA", "DEV.COMANDERO", "DEV.ENCARGADO"], nombres.Order());
     }
 }

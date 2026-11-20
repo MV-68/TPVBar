@@ -3,7 +3,9 @@
     Crea y arranca un clúster PostgreSQL 18 LOCAL de DESARROLLO para TPVBar.
 
 .DESCRIPTION
-    - Usa su propio directorio de datos (.pgdata) y puerto (5433). No toca ningún otro PostgreSQL del equipo.
+    - Usa su propio directorio de datos (.pgdata) y puerto (5434). No toca ningún otro PostgreSQL del equipo.
+      (Era 5433 hasta que chocó con el PostgreSQL de otra aplicación: ver D-071.) Si el clúster está en marcha en
+      otro puerto, lo para y lo vuelve a arrancar en el indicado; si el puerto lo ocupa otro programa, se detiene.
     - Escucha solo en localhost.
     - Genera contraseñas aleatorias; las guarda en .pgdata\dev-credentials.json (ignorado por Git)
       y las registra como User Secrets de TPVBar.Web. Nunca se escriben en appsettings.
@@ -12,7 +14,7 @@
 #>
 [CmdletBinding()]
 param(
-    [int]$Port = 5433,
+    [int]$Port = 5434,
     [string]$PgBin = "C:\Program Files\PostgreSQL\18\bin"
 )
 
@@ -55,8 +57,33 @@ if (-not (Test-Path (Join-Path $data 'PG_VERSION'))) {
 
 $cred = Get-Content $credFile -Raw | ConvertFrom-Json
 
+# demo.ps1 lee el puerto de este archivo: se mantiene al día si cambia.
+if ($cred.port -ne $Port) {
+    $cred.port = $Port
+    $cred | ConvertTo-Json | Set-Content -Path $credFile -Encoding utf8
+}
+
+# Si el clúster ya está en marcha pero en otro puerto (p. ej. el antiguo 5433), se reinicia en el nuevo.
+& "$PgBin\pg_ctl.exe" status -D $data | Out-Null
+if ($LASTEXITCODE -eq 0) {
+    $runningPort = [int](Get-Content (Join-Path $data 'postmaster.pid') -TotalCount 4)[3]
+    if ($runningPort -ne $Port) {
+        Write-Host "PostgreSQL de desarrollo en marcha en el puerto ${runningPort}: se reinicia en $Port ..."
+        & "$PgBin\pg_ctl.exe" stop -D $data -m fast | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "No se pudo parar el PostgreSQL de desarrollo. Revise $log" }
+    }
+}
+
 & "$PgBin\pg_ctl.exe" status -D $data | Out-Null
 if ($LASTEXITCODE -ne 0) {
+    # Si otro programa (p. ej. el PostgreSQL de otra aplicación) ya escucha en el puerto, TPVBar acabaría
+    # conectándose a él y fallaría la contraseña: mejor detenerse con un mensaje claro.
+    $busy = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+    if ($busy) {
+        $owner = (Get-Process -Id $busy[0].OwningProcess -ErrorAction SilentlyContinue).ProcessName
+        throw "El puerto $Port ya lo usa otro programa ($owner, PID $($busy[0].OwningProcess)). Use -Port con otro puerto libre."
+    }
+
     Write-Host "Arrancando PostgreSQL en localhost:$Port ..."
     # Proceso desacoplado: el servidor sigue vivo al cerrar esta consola y no retiene su salida.
     Start-Process -FilePath "$PgBin\pg_ctl.exe" -WindowStyle Hidden `

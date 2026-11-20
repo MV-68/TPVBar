@@ -82,7 +82,7 @@ builder.Services
 
 var app = builder.Build();
 
-// Comandos de administración (--migrate, --create-admin): se ejecutan y terminan sin arrancar el servidor.
+// Comandos de administración (--migrate, --create-admin, --create-user): se ejecutan y terminan sin arrancar el servidor.
 if (AdminCommands.IsAdminCommand(args))
 {
     Environment.ExitCode = await AdminCommands.RunAsync(app, args);
